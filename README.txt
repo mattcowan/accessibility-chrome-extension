@@ -1,1 +1,0 @@
-And so another great adventure begins.

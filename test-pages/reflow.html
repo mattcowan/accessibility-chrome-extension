@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reflow at 320px</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    .test-section {
+      margin: 2rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+
+    .test-section h3 {
+      margin-top: 0;
+      font-size: 1rem;
+    }
+
+    .test-note {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+
+    /* Defect (a): fixed 600px width */
+    #fixed-wide {
+      width: 600px;
+      overflow: auto;
+      background: #ffe6e6;
+      border: 2px solid red;
+      padding: 1rem;
+      margin: 1rem 0;
+    }
+
+    /* Review (b): data table with 8 columns */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+    }
+
+    thead {
+      background: #f0f0f0;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 0.5rem;
+      text-align: left;
+      font-size: 0.9rem;
+    }
+
+    .data-table {
+      background: #fff9e6;
+      border: 2px solid #ff9800;
+      overflow: auto;
+      margin: 1rem 0;
+    }
+
+    /* Pass (c): responsive image */
+    #responsive-img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 1rem 0;
+      border: 2px solid green;
+      padding: 1rem;
+      background: #e6ffe6;
+    }
+
+    /* Pass (d): normal fluid paragraph */
+    #normal-para {
+      line-height: 1.6;
+    }
+
+    /* Review (e): wide code block */
+    pre {
+      background: #f5f5f5;
+      border: 1px solid #ccc;
+      padding: 1rem;
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 0.9rem;
+      margin: 1rem 0;
+    }
+
+    .pre-wrap {
+      border: 2px solid #ff9800;
+      background: #fff9e6;
+      margin: 1rem 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Reflow at 320px Viewport</h1>
+  <p>
+    These examples test how content reflows at a 320px viewport (mobile breakpoint).
+    Resize your browser to 320px wide, or use DevTools device emulation, to see reflow issues.
+  </p>
+
+  <div class="test-section">
+    <h3>❌ Defect (a): Fixed 600px width</h3>
+    <div id="fixed-wide" data-expect="fail">
+      <strong>This container is fixed 600px wide.</strong>
+      At 320px viewport, it causes horizontal scrolling.
+      Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+    </div>
+    <p class="test-note">✗ At 320px, user must scroll horizontally.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (b): Data table with 8 columns</h3>
+    <div class="data-table" data-expect="review">
+      <table>
+        <thead>
+          <tr>
+            <th>Col 1</th>
+            <th>Col 2</th>
+            <th>Col 3</th>
+            <th>Col 4</th>
+            <th>Col 5</th>
+            <th>Col 6</th>
+            <th>Col 7</th>
+            <th>Col 8</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>A</td>
+            <td>B</td>
+            <td>C</td>
+            <td>D</td>
+            <td>E</td>
+            <td>F</td>
+            <td>G</td>
+            <td>H</td>
+          </tr>
+          <tr>
+            <td>1</td>
+            <td>2</td>
+            <td>3</td>
+            <td>4</td>
+            <td>5</td>
+            <td>6</td>
+            <td>7</td>
+            <td>8</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="test-note">⚠ Data tables are exempt from reflow rules but may need a scroll wrapper at 320px.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (c): Responsive image</h3>
+    <img id="responsive-img" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='200'%3E%3Crect fill='%23e6ffe6' width='400' height='200'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23000' font-size='20'%3EResponsive Image%3C/text%3E%3C/svg%3E" alt="Responsive image that scales to container width">
+    <p class="test-note">✓ max-width: 100% allows responsive scaling.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (d): Normal fluid paragraph</h3>
+    <p id="normal-para" data-expect="pass">
+      This paragraph flows naturally and wraps to fit the viewport width.
+      Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+      At any width, text reflows and remains readable. No horizontal scrolling needed.
+    </p>
+    <p class="test-note">✓ Normal flow, no fixed widths.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (e): Wide code block</h3>
+    <div class="pre-wrap" data-expect="review">
+      <pre>function veryLongFunctionNameThatExtendsTheLineAndCausesHorizontalScrolling() {
+  const veryLongVariableName = "This line is intentionally very long to force horizontal scroll at 320px viewport";
+  return veryLongVariableName;
+}</pre>
+    </div>
+    <p class="test-note">⚠ Code blocks may scroll; acceptable if scrollable container is provided.</p>
+  </div>
+
+  <hr>
+  <p style="font-size: 0.9rem; color: #666;">
+    <strong>Testing tip:</strong> Use DevTools → Responsive Design Mode (Ctrl+Shift+M) to set viewport to 320px.
+  </p>
+  <p><a href="index.html">← Back to index</a></p>
+</body>
+</html>

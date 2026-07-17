@@ -1,0 +1,83 @@
+# Accessibility Modes & Checkers
+
+Chrome extension for accessibility testing: emulate accessibility media features and
+vision deficiencies per-tab, run WCAG 2.2 checkers that fill WAVE's gaps, and export
+findings to CSV with a run-over-run diff. Ships with a companion Playwright
+keyboard-trap scanner.
+
+## Install (load unpacked)
+
+1. Open `chrome://extensions`
+2. Enable **Developer mode** (top right)
+3. **Load unpacked** → select this folder
+
+## Features
+
+### Emulation modes (per-tab, via Chrome DevTools Protocol)
+
+- **Reduced motion** — `prefers-reduced-motion: reduce`
+- **Color scheme** — `prefers-color-scheme: dark | light`
+- **Forced colors** — `forced-colors: active` (approximates Windows High Contrast; Chromium renders the forced palette)
+- **Contrast** — `prefers-contrast: more | less` (≈ macOS Increase Contrast; media feature only — the page must support it)
+- **Reduced transparency / Inverted colors** — hidden automatically if your Chrome version rejects them
+- **Reflow test** — 320 px viewport override (WCAG 1.4.10), plain or at 4× visual zoom
+  (the 4× option is equivalent to a 1280 px window at 400% browser zoom — the canonical
+  1.4.10 test condition — and shows content magnified as a low-vision user sees it)
+- **Vision simulation** — protanopia, deuteranopia, tritanopia, achromatopsia, blurred vision, reduced contrast (Chrome's built-in colorimetric simulations; one at a time)
+
+### Checkers (run on demand from the popup)
+
+| Checker | WCAG | What it does |
+|---|---|---|
+| Motion respect | 2.3.3 / 2.2.2 | With reduced-motion emulated, reports animations and autoplaying media still running |
+| Text spacing | 1.4.12 | Applies the standard spacing overrides, then flags **newly** clipped text (pre-existing clipping is baselined out) |
+| Focus visibility | 2.4.7 | Badges tab order; flags focusables with no detectable focus indicator (style-diff + CSSOM `:focus`/`:focus-visible` analysis, confidence-graded) |
+| Target size | 2.5.8 | Flags interactive targets under 24×24 px, with the spacing and inline exceptions approximated |
+| Hover/focus content | 1.4.13 | Flags `title` tooltips; discovers CSS reveal-on-hover/focus content, triggers it with **real** CDP mouse events, and tests Escape dismissability |
+| Reflow scan | 1.4.10 | With the 320 px override on, reports elements that force horizontal scrolling (tables/images/code flagged for review, not failure) |
+| Accessible names | 4.1.2 | Batch-flags interactive elements with empty accessible names + a hover-to-inspect tooltip showing role/name/source (Escape exits) |
+
+### Report
+
+- Findings aggregate per tab; severity is `fail` / `warn` / `review` (heuristics are graded honestly — `review` means "verify by hand").
+- **Export CSV** (Excel-safe RFC 4180). Columns: tool, wcag, severity, selector, snippet, details, url, timestamp, status.
+- **Run-over-run diff**: re-running a checker marks each finding `new` or `existing` and reports `resolved` ones, persisted per URL+tool across browser restarts.
+
+## The debugger infobar
+
+Emulation uses the `chrome.debugger` API — the only way an extension can emulate CSS
+media features and vision deficiencies. While any mode is active, Chrome shows a yellow
+**"…started debugging this browser"** bar; turning every mode off detaches and removes
+it. Consequences:
+
+- DevTools and the extension can't debug the same tab at once. If DevTools is open,
+  emulation fails with a message; if you open DevTools while emulating, emulation stops.
+- Dismissing the infobar (×) also stops emulation; the popup reflects that.
+- Emulation isn't available on `chrome://` pages, the Web Store, or other extensions.
+
+## Limitations
+
+- Checkers run in same-origin frames only (activeTab); cross-origin iframes are not scanned.
+- Closed shadow roots are invisible to all checkers.
+- Focus-indicator detection is heuristic: synthetic focus may not trigger `:focus-visible`,
+  and cross-origin stylesheets can't be read — such findings are downgraded to `review`.
+- The hover checker only discovers CSS-rule-based reveals (`:hover`/`:focus` toggling
+  display/visibility/opacity); JS-driven tooltips are not probed.
+- The accessible-name computation is a simplified subset of the AccName algorithm.
+- If you navigate the tab while the popup is closed, reopen the popup before running
+  checkers (activeTab re-grant).
+
+## Companion keyboard-trap scanner
+
+Keyboard traps can't be reliably detected from inside a page (synthetic key events are
+untrusted), so that lives in [tools/keyboard-trap-scan/](tools/keyboard-trap-scan/) — a
+Playwright CLI that presses real Tab keys, detects stuck/cycling focus, probes Shift+Tab
+and Escape escapability, and writes the same CSV schema. See its README, and
+`EXTEND-PROMPT.md` for a ready-made prompt to extend it (crawl mode, modal interaction,
+CI).
+
+## Test pages
+
+Deliberately broken fixtures for every checker live in [test-pages/](test-pages/)
+(each defect is annotated with `data-expect`). With WAMP running:
+`http://localhost/chrome-ext-accessibility-modes/test-pages/`

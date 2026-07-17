@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accessible Names</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    .test-section {
+      margin: 2rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+
+    .test-section h3 {
+      margin-top: 0;
+      font-size: 1rem;
+    }
+
+    button {
+      padding: 0.5rem 1rem;
+      margin: 0.5rem;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    input {
+      padding: 0.5rem;
+      font-size: 1rem;
+    }
+
+    label {
+      margin-right: 1rem;
+    }
+
+    .test-note {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+
+    .icon-button {
+      width: 48px;
+      height: 48px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #f0f0f0;
+      border: 1px solid #999;
+    }
+
+    svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .img-in-link {
+      display: inline-block;
+      margin-right: 1rem;
+    }
+
+    .img-in-link img {
+      border: 1px solid #ccc;
+    }
+
+    .heading-section {
+      margin-top: 2rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Accessible Names</h1>
+  <p>
+    This page tests various methods of providing accessible names to interactive elements.
+    Screen readers use the accessible name to announce what an element does.
+  </p>
+
+  <div class="test-section">
+    <h3>❌ Defect (a): Icon button with no text or label</h3>
+    <button class="icon-button" data-expect="fail" aria-label="">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M3 3v8m16 9a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16m18 0v-8" />
+      </svg>
+    </button>
+    <p class="test-note">✗ Icon-only button with empty aria-label. No accessible name.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (b): Button with aria-label</h3>
+    <button data-expect="pass" aria-label="Save document">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+        <polyline points="17 21 17 13 7 13 7 21" />
+        <polyline points="7 3 7 8 15 8" />
+      </svg>
+      Save
+    </button>
+    <p class="test-note">✓ Button has descriptive aria-label.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (c): Input with associated label</h3>
+    <label for="name-input">Full Name:</label>
+    <input type="text" id="name-input" data-expect="pass" placeholder="Enter your name">
+    <p class="test-note">✓ Input has associated &lt;label for&gt;.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>❌ Defect (d): Image in link with no alt text</h3>
+    <a href="#" class="img-in-link" data-expect="fail">
+      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Crect fill='%23e6e6e6' width='60' height='60'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%23999' font-size='12'%3EIcon%3C/text%3E%3C/svg%3E" alt="">
+    </a>
+    <p class="test-note">✗ Image inside link has empty alt. Link has no text. Empty accessible name.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (e): Button labeled via aria-labelledby</h3>
+    <h2 id="btn-label" class="heading-section">Delete Account</h2>
+    <button aria-labelledby="btn-label" data-expect="pass" style="background: #ffcccc; color: #cc0000;">
+      Confirm
+    </button>
+    <p class="test-note">✓ Button's accessible name comes from aria-labelledby pointing at h2.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (f): Plain text button</h3>
+    <button data-expect="pass">
+      Click Me
+    </button>
+    <p class="test-note">✓ Button text provides clear accessible name.</p>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+</body>
+</html>

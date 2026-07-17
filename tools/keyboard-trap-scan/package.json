@@ -1,0 +1,13 @@
+{
+  "name": "keyboard-trap-scan",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright-based WCAG 2.1.2 keyboard trap scanner. Presses real Tab keys and watches where focus goes.",
+  "scripts": {
+    "scan": "node scan.js"
+  },
+  "dependencies": {
+    "playwright": "^1.45.0"
+  }
+}

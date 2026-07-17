@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media Query Testing</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 1000px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+
+    .media-box {
+      height: 100px;
+      border: 2px solid #ccc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      background: #f5f5f5;
+      color: #666;
+    }
+
+    /* Motion */
+    @media (prefers-reduced-motion: reduce) {
+      #motion-reduce {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #motion-reduce::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Color scheme dark */
+    @media (prefers-color-scheme: dark) {
+      #color-dark {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #color-dark::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Color scheme light */
+    @media (prefers-color-scheme: light) {
+      #color-light {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #color-light::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Forced colors */
+    @media (forced-colors: active) {
+      #forced-colors {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #forced-colors::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Contrast more */
+    @media (prefers-contrast: more) {
+      #contrast-more {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #contrast-more::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Contrast less */
+    @media (prefers-contrast: less) {
+      #contrast-less {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #contrast-less::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Reduced transparency */
+    @media (prefers-reduced-transparency: reduce) {
+      #reduced-transparency {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #reduced-transparency::after {
+        content: " ACTIVE";
+      }
+    }
+
+    /* Inverted colors */
+    @media (inverted-colors: inverted) {
+      #inverted-colors {
+        background: #90EE90;
+        color: #000;
+        border-color: green;
+      }
+      #inverted-colors::after {
+        content: " ACTIVE";
+      }
+    }
+
+    .color-swatches {
+      display: flex;
+      gap: 1rem;
+      margin: 2rem 0;
+      align-items: center;
+    }
+
+    .swatch {
+      width: 100px;
+      height: 100px;
+      border: 2px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 0.8rem;
+    }
+
+    .red { background: #ff0000; color: white; }
+    .green { background: #00cc00; color: white; }
+    .blue { background: #0066ff; color: white; }
+
+    .rainbow {
+      height: 100px;
+      background: linear-gradient(90deg,
+        red, orange, yellow, lime, cyan, blue, indigo, violet);
+      margin: 2rem 0;
+      border: 2px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px black;
+    }
+
+    .semi-transparent {
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      padding: 2rem;
+      margin: 2rem 0;
+      border: 2px solid #999;
+    }
+  </style>
+</head>
+<body>
+  <h1>Media Query Testing</h1>
+  <p>
+    This page contains boxes that light up green when their media queries match.
+    Use your browser's accessibility settings or DevTools to test different preference modes.
+  </p>
+
+  <h2>Media Query Status Boxes</h2>
+  <p style="font-size: 0.9rem; color: #666;">
+    Each box shows "ACTIVE" and turns green when its media query matches:
+  </p>
+
+  <div class="media-grid">
+    <div class="media-box" id="motion-reduce">prefers-reduced-motion: reduce</div>
+    <div class="media-box" id="color-dark">prefers-color-scheme: dark</div>
+    <div class="media-box" id="color-light">prefers-color-scheme: light</div>
+    <div class="media-box" id="forced-colors">forced-colors: active</div>
+    <div class="media-box" id="contrast-more">prefers-contrast: more</div>
+    <div class="media-box" id="contrast-less">prefers-contrast: less</div>
+    <div class="media-box" id="reduced-transparency">prefers-reduced-transparency: reduce</div>
+    <div class="media-box" id="inverted-colors">inverted-colors: inverted</div>
+  </div>
+
+  <h2>Rainbow Strip</h2>
+  <p>Use this for colorblind mode testing:</p>
+  <div class="rainbow">Red · Orange · Yellow · Green · Cyan · Blue · Indigo · Violet</div>
+
+  <h2>Color Swatches</h2>
+  <p>Test color perception with these basic colors:</p>
+  <div class="color-swatches">
+    <div class="swatch red">RED</div>
+    <div class="swatch green">GREEN</div>
+    <div class="swatch blue">BLUE</div>
+  </div>
+
+  <h2>Semi-Transparent Overlay</h2>
+  <p>For testing transparency reduction:</p>
+  <div class="semi-transparent">
+    This panel has 50% black overlay. When prefers-reduced-transparency: reduce is active,
+    it should appear more opaque.
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+</body>
+</html>
