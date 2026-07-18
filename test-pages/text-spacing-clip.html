@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Text Spacing & Clipping</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      margin: 2rem 0;
+    }
+
+    .card {
+      border: 2px solid #999;
+      padding: 1rem;
+      background: #f9f9f9;
+      font-size: 0.95rem;
+    }
+
+    .card h3 {
+      margin-top: 0;
+      font-size: 1rem;
+    }
+
+    /* Defect (a): clips when text-spacing applied.
+       Three <br>-forced lines: 3 × 1.1 × 16px = 52.8px fits in 60px,
+       3 × 1.5 × 16px = 72px does not. */
+    #clips-when-spaced {
+      width: 250px;
+      height: 60px;
+      font-size: 16px;
+      overflow: hidden;
+      line-height: 1.1;
+      border: 2px solid red;
+      padding: 0.5rem;
+      background: #ffe6e6;
+    }
+
+    /* Pass (b): already clipped, pre-existing */
+    #already-clipped {
+      width: 250px;
+      height: 30px;
+      overflow: hidden;
+      padding: 0.5rem;
+      border: 2px solid green;
+      background: #e6ffe6;
+    }
+
+    /* Review (c): ellipsis card */
+    #ellipsis-card {
+      width: 250px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border: 2px solid #ff9800;
+      padding: 0.5rem;
+      background: #fff9e6;
+    }
+
+    /* Pass (d): normal paragraph */
+    #normal-para {
+      width: 250px;
+      border: 2px solid blue;
+      padding: 0.5rem;
+      background: #e6e6ff;
+    }
+  </style>
+</head>
+<body>
+  <h1>Text Spacing & Clipping Defects</h1>
+  <p>
+    These cards test text spacing and clipping scenarios. When text-spacing is increased (line-height 1.5),
+    some cards will clip content. Look for overflow hidden + insufficient height combinations.
+  </p>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>Clips on Increased Spacing</h3>
+      <div id="clips-when-spaced" data-expect="fail">
+        Line one fits fine<br>line two fits fine<br>line three just fits
+      </div>
+      <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">
+        ✗ <strong>Expect FAIL:</strong> Height too small for increased spacing
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Already Clipped</h3>
+      <div id="already-clipped" data-expect="pass">
+        This container is 30px tall with overflow hidden. The text clips regardless of spacing.
+        This is a pre-existing design choice, not a spacing issue.
+      </div>
+      <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">
+        ✓ <strong>Expect PASS:</strong> Pre-existing clip, not spacing-related
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Ellipsis Card</h3>
+      <div id="ellipsis-card" data-expect="review">
+        This text is in a single line with text-overflow ellipsis applied.
+      </div>
+      <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">
+        ⚠ <strong>Expect REVIEW:</strong> Intentional ellipsis, but content is hidden
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Normal Paragraph</h3>
+      <div id="normal-para" data-expect="pass">
+        This is a normal paragraph with auto height and text wrapping.
+        It will grow as needed and never clip content.
+      </div>
+      <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">
+        ✓ <strong>Expect PASS:</strong> Flexible container, no clipping
+      </p>
+    </div>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+</body>
+</html>

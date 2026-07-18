@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Motion & Animation Defects</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .test-box {
+      display: inline-block;
+      width: 120px;
+      height: 120px;
+      margin: 1rem;
+      padding: 1rem;
+      text-align: center;
+      vertical-align: top;
+      font-size: 0.9rem;
+      font-weight: bold;
+      border: 2px solid #999;
+      background: #f9f9f9;
+    }
+
+    /* Defect (a): infinite spin without media query */
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .rude {
+      animation: spin 2s linear infinite;
+    }
+
+    /* Defect (d): finite 3s one-shot transition on load */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .one-shot {
+      animation: pulse 3s ease-in-out 1;
+    }
+
+    /* Pass (b): respectful animation with media query */
+    @keyframes soft-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .respectful {
+        animation: soft-pulse 2s ease-in-out infinite;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Motion & Animation Defects</h1>
+  <p>
+    This page tests animation and motion handling. Elements below show different motion scenarios.
+    Look for animations not wrapped in media queries, autoplay videos, and marquee elements.
+  </p>
+
+  <div class="test-box rude" data-expect="fail">
+    <strong>Spinning</strong><br>
+    Infinite spin<br>(no media query)
+  </div>
+
+  <div class="test-box respectful" data-expect="pass">
+    <strong>Respectful Pulse</strong><br>
+    Wrapped in<br>prefers-reduced-motion
+  </div>
+
+  <div class="test-box one-shot" data-expect="warn">
+    <strong>One-Shot</strong><br>
+    Finite 3s pulse<br>(low risk)
+  </div>
+
+  <br><br>
+
+  <div data-expect="fail" style="margin: 2rem 0; padding: 1rem; border: 2px solid red; background: #ffe6e6;">
+    <strong>Autoplay Video (defect):</strong>
+    <video
+      width="200"
+      height="150"
+      autoplay
+      loop
+      muted
+      style="background: #ccc; margin: 0.5rem 0;"
+      data-expect="fail">
+      <source src="" type="video/mp4">
+      Autoplay video with no controls (no src).
+    </video>
+    <p style="font-size: 0.9rem; color: #666;">
+      Note: Video element added with autoplay + loop + muted. No playable source (impractical in static HTML).
+      Flag the autoplay attribute itself as the issue.
+    </p>
+  </div>
+
+  <marquee data-expect="review" style="background: #fff3cd; padding: 1rem; margin: 1rem 0; border: 2px solid #ff9800;">
+    <strong>Marquee Element</strong> — This is a deprecated &lt;marquee&gt; that scrolls text. Review for scrolling motion.
+  </marquee>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+</body>
+</html>

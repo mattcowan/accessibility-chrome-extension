@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Accessibility Modes &amp; Checkers</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Accessibility Modes</h1>
+    <div id="banner" class="banner" role="alert" hidden></div>
+    <div id="restricted-msg" class="banner" hidden>
+      Emulation and checkers aren't available on this page (browser or store pages).
+    </div>
+  </header>
+
+  <fieldset id="emulation">
+    <legend>Emulation modes</legend>
+    <div class="row">
+      <label><input type="checkbox" id="toggle-reduced-motion"> Reduced motion</label>
+      <small>prefers-reduced-motion: reduce</small>
+    </div>
+    <div class="row" role="radiogroup" aria-labelledby="scheme-label">
+      <span id="scheme-label" class="group-label">Color scheme</span>
+      <label><input type="radio" name="color-scheme" id="scheme-system" value="" checked> System</label>
+      <label><input type="radio" name="color-scheme" id="scheme-light" value="light"> Light</label>
+      <label><input type="radio" name="color-scheme" id="scheme-dark" value="dark"> Dark</label>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="toggle-forced-colors"> Forced colors</label>
+      <small>Approximates Windows High Contrast rendering</small>
+    </div>
+    <div class="row" role="radiogroup" aria-labelledby="contrast-label">
+      <span id="contrast-label" class="group-label">Contrast</span>
+      <label><input type="radio" name="contrast" id="contrast-system" value="" checked> System</label>
+      <label><input type="radio" name="contrast" id="contrast-more" value="more"> More</label>
+      <label><input type="radio" name="contrast" id="contrast-less" value="less"> Less</label>
+      <small>≈ macOS Increase Contrast — media feature only; the page must support prefers-contrast</small>
+    </div>
+    <div class="row" id="row-reduced-transparency">
+      <label><input type="checkbox" id="toggle-reduced-transparency"> Reduced transparency</label>
+    </div>
+    <div class="row" id="row-inverted-colors">
+      <label><input type="checkbox" id="toggle-inverted-colors"> Inverted colors</label>
+    </div>
+    <div class="row" role="radiogroup" aria-labelledby="reflow-label">
+      <span id="reflow-label" class="group-label">Reflow test (WCAG 1.4.10)</span>
+      <label><input type="radio" name="reflow" id="reflow-off" value="" checked> Off</label>
+      <label><input type="radio" name="reflow" id="reflow-320" value="320"> 320&nbsp;px</label>
+      <label><input type="radio" name="reflow" id="reflow-zoom" value="320zoom"> 320&nbsp;px @ 4× zoom</label>
+      <small>4× zoom renders the 320&nbsp;px viewport magnified — equivalent to a 1280&nbsp;px window at 400% browser zoom, the canonical 1.4.10 test</small>
+    </div>
+  </fieldset>
+
+  <fieldset id="vision">
+    <legend>Vision simulation</legend>
+    <label><input type="radio" name="vision" id="vision-none" value="none" checked> None</label>
+    <label><input type="radio" name="vision" id="vision-protanopia" value="protanopia"> Protanopia (no red)</label>
+    <label><input type="radio" name="vision" id="vision-deuteranopia" value="deuteranopia"> Deuteranopia (no green)</label>
+    <label><input type="radio" name="vision" id="vision-tritanopia" value="tritanopia"> Tritanopia (no blue)</label>
+    <label><input type="radio" name="vision" id="vision-achromatopsia" value="achromatopsia"> Achromatopsia (no color)</label>
+    <label><input type="radio" name="vision" id="vision-blurredVision" value="blurredVision"> Blurred vision</label>
+    <label><input type="radio" name="vision" id="vision-reducedContrast" value="reducedContrast"> Reduced contrast</label>
+  </fieldset>
+
+  <fieldset id="checkers">
+    <legend>Checkers</legend>
+    <div class="checker-row">
+      <span class="name">Motion respect <small>2.3.3 / 2.2.2 — best with Reduced motion ON</small></span>
+      <button type="button" id="run-motion">Run</button>
+      <span class="badge" id="badge-motion" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Text spacing <small>1.4.12</small></span>
+      <button type="button" id="toggle-text-spacing">Apply overrides</button>
+      <button type="button" id="run-text-spacing">Analyze clipping</button>
+      <span class="badge" id="badge-text-spacing" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Focus visibility <small>2.4.7</small></span>
+      <button type="button" id="run-focus">Run</button>
+      <span class="badge" id="badge-focus" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Target size <small>2.5.8</small></span>
+      <button type="button" id="run-target-size">Run</button>
+      <span class="badge" id="badge-target-size" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Hover/focus content <small>1.4.13</small></span>
+      <button type="button" id="run-hover">Run</button>
+      <span class="badge" id="badge-hover" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Reflow scan <small>1.4.10</small></span>
+      <button type="button" id="run-reflow-scan" disabled title="Enable the Reflow test toggle first">Scan overflow</button>
+      <span class="badge" id="badge-reflow" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Accessible names <small>4.1.2 — hover to inspect</small></span>
+      <button type="button" id="toggle-accname">Start inspector</button>
+      <span class="badge" id="badge-accname" hidden></span>
+    </div>
+    <div class="checker-row">
+      <button type="button" id="clear-overlays" class="secondary">Clear overlays</button>
+    </div>
+  </fieldset>
+
+  <fieldset id="report">
+    <legend>Report</legend>
+    <div id="report-summary">No findings yet.</div>
+    <details>
+      <summary>Findings preview</summary>
+      <ul id="findings-list"></ul>
+    </details>
+    <div class="row buttons">
+      <button type="button" id="export-csv">Export CSV</button>
+      <button type="button" id="clear-findings" class="secondary">Clear findings</button>
+      <button type="button" id="clear-history" class="secondary">Clear history for this URL</button>
+    </div>
+  </fieldset>
+
+  <div id="status" role="status" aria-live="polite" class="visually-hidden"></div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

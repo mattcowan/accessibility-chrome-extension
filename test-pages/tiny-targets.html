@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tiny Touch Targets</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    .test-section {
+      margin: 2rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+
+    .test-section h3 {
+      margin-top: 0;
+      font-size: 1rem;
+    }
+
+    /* Defect (a): 16x16 buttons side-by-side, 2px gap */
+    .tiny-buttons {
+      display: flex;
+      gap: 2px;
+      margin: 1rem 0;
+    }
+
+    .tiny-btn {
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border: 1px solid #333;
+      background: #ccc;
+      cursor: pointer;
+      font-size: 0.7rem;
+    }
+
+    /* Warn (b): 20x20 button with 30px margin */
+    .spaced-button {
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      margin: 30px;
+      border: 1px solid #0066cc;
+      background: #e6e6ff;
+      cursor: pointer;
+    }
+
+    /* Review (c): inline text link */
+    .inline-link {
+      color: #0066cc;
+      text-decoration: underline;
+    }
+
+    /* Pass (d): 48x48 button */
+    .big-button {
+      width: 48px;
+      height: 48px;
+      padding: 0;
+      border: 1px solid green;
+      background: #e6ffe6;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    /* Nested targets (e) */
+    .nested-wrapper {
+      display: inline-block;
+    }
+
+    .nested-wrapper a {
+      display: inline-block;
+      padding: 0.5rem 1rem;
+      background: #fff3cd;
+      border: 2px solid #ff9800;
+      text-decoration: none;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .nested-wrapper button {
+      padding: 0.25rem 0.5rem;
+      background: #fff;
+      border: 1px solid #ff9800;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Tiny Touch Targets</h1>
+  <p>
+    These controls test minimum touch target sizes (WCAG 2.5.5 Level AAA recommends 44×44 CSS px).
+    Look for targets too small, too close together, or nested clickable elements.
+  </p>
+
+  <div class="test-section">
+    <h3>❌ Defect (a): 16×16 buttons, 2px gap</h3>
+    <div class="tiny-buttons">
+      <button class="tiny-btn" data-expect="fail" title="T1">T1</button>
+      <button class="tiny-btn" data-expect="fail" title="T2">T2</button>
+    </div>
+    <p style="font-size: 0.85rem; color: #666;">
+      Both 16×16px, only 2px apart. Too small and crowded.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Warn (b): 20×20 button with 30px margin</h3>
+    <button class="spaced-button" data-expect="warn" title="Isolated">±</button>
+    <p style="font-size: 0.85rem; color: #666;">
+      20×20px but well-isolated. Spacing exception applies; warn level.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (c): Inline text link</h3>
+    <p>
+      This is a paragraph with an
+      <a href="#" class="inline-link" data-expect="review">inline text link</a>
+      embedded in it. Links inside text are typically exempt from size rules.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (d): 48×48 button</h3>
+    <button class="big-button" data-expect="pass">OK</button>
+    <p style="font-size: 0.85rem; color: #666;">
+      Large button (48×48px) meets WCAG Level AAA recommendations.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>Nested Targets (e)</h3>
+    <div class="nested-wrapper">
+      <a href="#" data-expect="fail">
+        Link wrapping a button:
+        <button data-expect="fail">Click</button>
+      </a>
+    </div>
+    <p style="font-size: 0.85rem; color: #666;">
+      A link wrapping a button creates two clickable targets. Report once (outermost).
+    </p>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+</body>
+</html>

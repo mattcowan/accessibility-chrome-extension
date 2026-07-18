@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Keyboard Traps</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    #trap {
+      background: #ffe6e6;
+      border: 2px solid red;
+      padding: 2rem;
+      margin: 2rem 0;
+      position: relative;
+    }
+
+    #trap h2 {
+      color: #cc0000;
+      margin-top: 0;
+    }
+
+    #trap button {
+      display: block;
+      width: 100%;
+      padding: 1rem;
+      margin: 0.5rem 0;
+      font-size: 1rem;
+      background: #ffcccc;
+      border: 1px solid #cc0000;
+      cursor: pointer;
+    }
+
+    #trap button:hover {
+      background: #ffb3b3;
+    }
+
+    .nav-link {
+      display: block;
+      margin: 1rem 0;
+      color: #0066cc;
+      text-decoration: underline;
+    }
+
+    .escapable-notice {
+      background: #fff9e6;
+      border: 2px dashed #ff9800;
+      padding: 1rem;
+      margin: 1rem 0;
+      display: none;
+    }
+
+    .escapable-notice.show {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <h1>Keyboard Traps</h1>
+
+  <p>
+    This page demonstrates keyboard trap scenarios. There are normal links/buttons before and after a "trap" div.
+    The trap div contains 3 buttons with focus cycling, preventing Tab/Shift+Tab from escaping.
+  </p>
+
+  <a href="#before" class="nav-link" data-expect="pass">✓ Before Trap: Click me</a>
+  <a href="#before2" class="nav-link" data-expect="pass">✓ Before Trap: Link 2</a>
+
+  <div id="trap" data-expect="fail">
+    <h2>🚫 Hard Keyboard Trap</h2>
+    <p>
+      Tab and Shift+Tab are intercepted. Focus cycles among these 3 buttons only.
+      You cannot Tab to elements after the trap.
+    </p>
+    <button id="trap-btn1" data-expect="fail">Button 1</button>
+    <button id="trap-btn2" data-expect="fail">Button 2</button>
+    <button id="trap-btn3" data-expect="fail">Button 3</button>
+  </div>
+
+  <div id="after-trap" class="nav-link" tabindex="-1" data-expect="fail">
+    ❌ After Trap: This link is unreachable by Tab.
+  </div>
+
+  <a href="#after2" class="nav-link" data-expect="fail">❌ After Trap: Link 2 (also unreachable)</a>
+
+  <div class="escapable-notice" id="escapable-notice">
+    ✓ <strong>Escapable Mode Active:</strong> Press Escape to break out of the trap.
+  </div>
+
+  <hr>
+  <p style="font-size: 0.9rem; color: #666;">
+    <strong>Testing escapable mode:</strong> Add <code>?escapable=1</code> to the URL to enable Escape key handling.
+  </p>
+
+  <script>
+    const trap = document.getElementById('trap');
+    const btn1 = document.getElementById('trap-btn1');
+    const btn2 = document.getElementById('trap-btn2');
+    const btn3 = document.getElementById('trap-btn3');
+    const afterTrap = document.getElementById('after-trap');
+    const escapableNotice = document.getElementById('escapable-notice');
+
+    const buttons = [btn1, btn2, btn3];
+    let currentIndex = 0;
+
+    // Check if escapable mode is enabled
+    const isEscapable = new URLSearchParams(window.location.search).get('escapable') === '1';
+
+    if (isEscapable) {
+      escapableNotice.classList.add('show');
+      trap.dataset.expect = 'warn'; // Escapable mode makes it low-severity
+    }
+
+    // Intercept Tab and Shift+Tab within the trap
+    trap.addEventListener('keydown', (event) => {
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          currentIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+        } else {
+          currentIndex = (currentIndex + 1) % buttons.length;
+        }
+        buttons[currentIndex].focus();
+      }
+
+      // Escape key: break out if escapable mode
+      if (event.key === 'Escape' && isEscapable) {
+        event.preventDefault();
+        afterTrap.focus();
+      }
+    });
+
+    // Track which button is focused
+    buttons.forEach((btn, idx) => {
+      btn.addEventListener('focus', () => {
+        currentIndex = idx;
+      });
+    });
+  </script>
+</body>
+</html>
