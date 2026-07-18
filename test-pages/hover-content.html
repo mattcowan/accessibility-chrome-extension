@@ -176,13 +176,44 @@
   </p>
 
   <div class="test-section">
-    <h3>❌ Defect (a): Title attribute only</h3>
+    <h3>🔍 Review (a): Title attribute with unique info</h3>
     <p>
-      <span class="title-trigger" title="This is a native browser tooltip" data-expect="fail">
+      <span class="title-trigger" title="This is a native browser tooltip" data-expect="review">
         Hover over me
       </span>
-      for a tooltip. Screen readers may not announce this; keyboard users cannot trigger it.
+      for a tooltip. The native tooltip is exempt from 1.4.13 (user-agent-controlled), but its
+      text isn't in the visible content — touch users and sighted keyboard users never see it,
+      so a human must verify the info exists elsewhere.
     </p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠️ Warn (a2): Redundant title on a link</h3>
+    <p>
+      <a href="#top" class="title-trigger" title="Hover over me too" data-expect="warn">Hover over me too</a>
+      — the title duplicates the link text: no WCAG failure, just double-announcement noise. Remove it.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>🔍 Review (a3): Link title carrying unique info</h3>
+    <p>
+      <a href="#top" class="title-trigger" title="Opens the quarterly PDF report" data-expect="review">Reports</a>
+      — the title adds link-purpose context that isn't in the link text (2.4.4 territory, human verify).
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>🔍 Review (a4): Input labeled only by its title</h3>
+    <p>
+      <input type="text" title="Search terms" data-expect="review">
+      — the title is the field's only accessible name; no visible label (3.3.2, human verify).
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (a5): iframe title (required accessible name, not a tooltip)</h3>
+    <iframe src="about:blank" title="Empty example frame" width="200" height="40" data-expect="pass"></iframe>
   </div>
 
   <div class="test-section">

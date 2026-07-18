@@ -184,7 +184,13 @@ const findingsKey = () => `findings:${tab.id}`;
 async function getStore() {
   const key = findingsKey();
   const stored = await chrome.storage.session.get(key);
-  return stored[key] ?? { url: tab.url, tools: {} };
+  const store = stored[key] ?? { url: tab.url, tools: {} };
+  // One report per page: if this tab has navigated to a different URL since
+  // findings were stored, start fresh rather than stacking sites in one report.
+  if (normUrl(store.url) !== normUrl(tab.url)) {
+    return { url: tab.url, tools: {} };
+  }
+  return store;
 }
 
 async function storeToolFindings(tool, rawFindings) {
@@ -244,6 +250,12 @@ function renderBadge(tool, findings) {
     el.textContent = '0';
     el.title = 'no findings';
   }
+}
+
+async function clearFindingsStore() {
+  await chrome.storage.session.remove(findingsKey());
+  for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
+  renderReport({ url: tab.url, tools: {} });
 }
 
 function allFindings(store) {
@@ -311,7 +323,7 @@ async function runHoverChecker(button) {
   banner('');
   let probing = false;
   try {
-    await inject([...LIBS, 'checkers/hover-content.js']);
+    await inject([...LIBS, 'checkers/lib/accname.js', 'checkers/hover-content.js']);
     const [top] = await callChecker('hoverStatic');
     const { findings, candidates } = top.result;
 
@@ -457,6 +469,33 @@ function wireCheckers() {
       checkerError(e);
     }
   });
+
+  // Full reset: every artifact a checker leaves on the page (overlay layer,
+  // text-spacing override stylesheet, live accname inspector), plus this
+  // tab's stored findings. Motion/reflow/hover leave nothing behind.
+  $('clear-all-checkers').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    banner('');
+    try {
+      await inject([OVERLAY], true);
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => globalThis.__a11yOverlay && globalThis.__a11yOverlay.clear(),
+      });
+      await inject([...LIBS, 'checkers/text-spacing.js'], true);
+      await callChecker('textSpacing', 'remove', true);
+      $('toggle-text-spacing').textContent = 'Apply overrides';
+      await inject([...LIBS, 'checkers/lib/accname.js', 'checkers/accname-inspector.js']);
+      await callChecker('accnameInspector', 'stop');
+      $('toggle-accname').textContent = 'Start inspector';
+      await clearFindingsStore();
+      announce('Cleared overlays, spacing overrides, inspector, and findings for this tab.');
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
 }
 
 // -------------------------------------------------------------- report wiring
@@ -477,14 +516,13 @@ function wireReport() {
       // keep default
     }
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-    downloadCsv(rows, `a11y-findings-${host}-${stamp}.csv`);
+    downloadCsv(rows, `a11y-findings-${host}-${stamp}.csv`, {
+      url: store.url,
+      exported: new Date().toISOString(),
+    });
   });
 
-  $('clear-findings').addEventListener('click', async () => {
-    await chrome.storage.session.remove(findingsKey());
-    for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
-    renderReport({ url: tab.url, tools: {} });
-  });
+  $('clear-findings').addEventListener('click', clearFindingsStore);
 
   $('clear-history').addEventListener('click', async () => {
     const prefix = `history:${normUrl(tab.url)}:`;

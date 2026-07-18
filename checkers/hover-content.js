@@ -1,6 +1,8 @@
 // Content-on-hover/focus checker (WCAG 1.4.13), two passes:
 //  - static:  __a11yCheckers.hoverStatic() -> {findings, candidates}
-//             title-attribute tooltips + CSSOM discovery of :hover/:focus
+//             title-attribute triage (redundant / unique-info / only-label —
+//             native title tooltips are exempt from 1.4.13, so these are
+//             never graded fail) + CSSOM discovery of :hover/:focus
 //             reveal rules (candidates for the dynamic pass).
 //  - dynamic: driven by the popup, which asks the service worker to send
 //             REAL CDP mouse-moves (CSS :hover cannot be faked from JS):
@@ -107,27 +109,66 @@ if (!globalThis.__a11yHoverContent) {
         .map((c) => ({ trigger: c.trigger, targets: Array.from(c.targets), kind: c.kind }));
     }
 
+    // Native title tooltips are NOT a 1.4.13 failure — the SC exempts content
+    // whose presentation is user-agent-controlled. What matters is whether the
+    // title text is redundant (best-practice removal), carries information the
+    // visible text lacks (2.4.4 / 1.3.1, human must verify), or is the field's
+    // only label (3.3.2). Author-built tooltips are the dynamic pass's job.
     globalThis.__a11yCheckers.hoverStatic = function hoverStatic() {
       const findings = [];
+      const A = globalThis.__a11yAccname;
+      const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
       const titled = [];
       F.collectMatching(document, '[title]', titled);
       for (const el of titled) {
-        if (!el.getAttribute('title')) continue;
+        const title = norm(el.getAttribute('title'));
+        if (!title) continue;
         const tag = el.tagName;
-        const nameFallback =
-          tag === 'IFRAME' || tag === 'ABBR' ||
-          ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(tag);
-        findings.push(
-          F.makeFinding({
-            tool: 'hover-content',
-            wcag: '1.4.13',
-            severity: nameFallback ? 'review' : 'fail',
-            el,
-            details: nameFallback
-              ? `title attribute on <${tag.toLowerCase()}> — often serving as a name/expansion, but the native tooltip is still not hoverable or dismissible. Prefer visible text or aria-label.`
-              : 'Native title tooltip: not dismissible without moving the pointer, not hoverable, invisible to keyboard and touch users — fails 1.4.13 and is unavailable to many users.',
-          })
-        );
+        // <iframe title> is the frame's required accessible name, not a
+        // tooltip pattern — nothing to flag.
+        if (tag === 'IFRAME') continue;
+        const acc = A.compute(el);
+        if (acc.source === 'title' && ['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) {
+          findings.push(
+            F.makeFinding({
+              tool: 'hover-content',
+              wcag: '3.3.2',
+              severity: 'review',
+              el,
+              details: `The title attribute is this <${tag.toLowerCase()}>'s only accessible name. Screen readers announce it, but sighted users get no visible label, and 3.3.2 requires labels or instructions where content requires input. Verify a visible label exists, or add a <label>.`,
+            })
+          );
+          continue;
+        }
+        const nameN = norm(acc.source === 'title' ? '' : acc.name);
+        const textN = norm(el.textContent);
+        const redundant =
+          (nameN && (nameN === title || nameN.includes(title))) ||
+          (textN && (textN === title || textN.includes(title)));
+        if (redundant) {
+          findings.push(
+            F.makeFinding({
+              tool: 'hover-content',
+              wcag: 'best-practice',
+              severity: 'warn',
+              el,
+              details: 'The title attribute duplicates the visible text: it adds no information, and some screen-reader configurations announce it twice. Remove it. (Native title tooltips are exempt from 1.4.13 — their presentation is user-agent-controlled.)',
+            })
+          );
+        } else {
+          const isLink = (tag === 'A' || tag === 'AREA') && el.hasAttribute('href');
+          findings.push(
+            F.makeFinding({
+              tool: 'hover-content',
+              wcag: isLink ? '2.4.4' : '1.3.1',
+              severity: 'review',
+              el,
+              details: `The title attribute carries text not present in the ${
+                isLink ? 'link text — link purpose must be determinable from it (2.4.4)' : 'visible text (1.3.1: information must not depend on one presentation channel)'
+              }. The native tooltip is exempt from 1.4.13 (user-agent-controlled), but it never appears for touch users or sighted keyboard users. Verify the information is available elsewhere; if not, move it into visible or visually-hidden text and remove the title.`,
+            })
+          );
+        }
       }
 
       const candidates = buildCandidates();

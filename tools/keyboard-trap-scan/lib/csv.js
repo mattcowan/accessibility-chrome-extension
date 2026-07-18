@@ -21,8 +21,13 @@ function field(value) {
   return s;
 }
 
-export function toCsv(findings) {
-  const rows = [COLUMNS.join(',')];
+export function toCsv(findings, meta = {}) {
+  const rows = [];
+  // Header block naming the run before the column row (Excel reads it fine).
+  if (meta.url) rows.push(`URL:,${field(meta.url)}`);
+  if (meta.exported) rows.push(`Exported:,${field(meta.exported)}`);
+  if (rows.length) rows.push('');
+  rows.push(COLUMNS.join(','));
   for (const f of findings) {
     rows.push(COLUMNS.map((c) => field(f[c])).join(','));
   }
