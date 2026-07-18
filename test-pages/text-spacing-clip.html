@@ -76,6 +76,19 @@
       padding: 0.5rem;
       background: #e6e6ff;
     }
+
+    /* Pass (e): classic sr-only — clips by design, invisible to sighted users */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
   </style>
 </head>
 <body>
@@ -125,6 +138,20 @@
       </div>
       <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">
         ✓ <strong>Expect PASS:</strong> Flexible container, no clipping
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Screen-Reader-Only Text</h3>
+      <p>
+        Visible label
+        <span class="sr-only" data-expect="pass">
+          Extra context for screen-reader users only. This text always overflows its
+          one-pixel clip box by design, before and after spacing overrides.
+        </span>
+      </p>
+      <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">
+        ✓ <strong>Expect PASS:</strong> Visually hidden on purpose — clipping here loses nothing
       </p>
     </div>
   </div>

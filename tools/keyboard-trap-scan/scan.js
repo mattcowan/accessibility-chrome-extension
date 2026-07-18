@@ -217,7 +217,11 @@ async function main() {
     );
   }
 
-  await writeFile(args.out, toCsv(findings), 'utf8');
+  await writeFile(
+    args.out,
+    toCsv(findings, { url: args.url, exported: new Date().toISOString() }),
+    'utf8'
+  );
   console.log(summary);
   console.log(`Report written to ${args.out} (${findings.length} rows).`);
   await browser.close();

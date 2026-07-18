@@ -1,7 +1,9 @@
 // Text-spacing stress test (WCAG 1.4.12). Command-driven:
 //   __a11yCheckers.textSpacing('apply' | 'remove' | 'status' | 'analyze')
-// 'analyze' captures a clipping baseline BEFORE applying the overrides, so
-// pre-existing clipping is never reported — only clipping the spacing causes.
+// 'apply' snapshots a clipping baseline BEFORE the overrides land (so Apply
+// then Analyze works, in either order), and 'analyze' reports only clipping
+// the spacing causes — pre-existing clipping and visually-hidden (sr-only)
+// elements, which clip by design, are never reported.
 if (!globalThis.__a11yTextSpacing) {
   globalThis.__a11yTextSpacing = true;
 
@@ -22,6 +24,10 @@ if (!globalThis.__a11yTextSpacing) {
 
     function apply() {
       if (isApplied()) return;
+      // Baseline BEFORE the overrides land, so pre-existing clipping is never
+      // reported — whether the user applies first and analyzes later, or lets
+      // analyze() apply for them.
+      globalThis.__a11yTextSpacingBaseline = clipState();
       const style = document.createElement('style');
       style.id = STYLE_ID;
       style.textContent = OVERRIDES;
@@ -34,6 +40,18 @@ if (!globalThis.__a11yTextSpacing) {
       globalThis.__a11yTextSpacingBaseline = null;
     }
 
+    // Visually-hidden (sr-only) elements clip their text BY DESIGN — nothing a
+    // sighted user can lose there. Recognize the common patterns: 1px boxes,
+    // clip: rect(0 0 0 0), and inset(50%/100%) clip-paths on absolutely
+    // positioned elements.
+    function visuallyHidden(el, style) {
+      if (el.clientWidth <= 2 && el.clientHeight <= 2) return true;
+      const offFlow = style.position === 'absolute' || style.position === 'fixed';
+      if (offFlow && style.clip !== 'auto') return true;
+      if (offFlow && /inset\((?:50|100)%/.test(style.clipPath)) return true;
+      return false;
+    }
+
     function clipState() {
       // Map of clipping element -> {sw, sh} for every element that hides
       // overflowing text content.
@@ -43,6 +61,7 @@ if (!globalThis.__a11yTextSpacing) {
       for (const el of all) {
         if (!el.clientWidth || !(el.textContent || '').trim()) continue;
         const style = getComputedStyle(el);
+        if (visuallyHidden(el, style)) continue;
         const hidesX = /hidden|clip/.test(style.overflowX);
         const hidesY = /hidden|clip/.test(style.overflowY);
         if (!hidesX && !hidesY) continue;
@@ -60,9 +79,8 @@ if (!globalThis.__a11yTextSpacing) {
       let baseline = globalThis.__a11yTextSpacingBaseline;
 
       if (!isApplied()) {
-        baseline = clipState();
-        globalThis.__a11yTextSpacingBaseline = baseline;
-        apply();
+        apply(); // captures the pre-override baseline itself
+        baseline = globalThis.__a11yTextSpacingBaseline;
         // Force a synchronous reflow so post-apply measurements are current.
         void document.documentElement.offsetHeight;
       } else if (!baseline) {

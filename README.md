@@ -33,15 +33,16 @@ keyboard-trap scanner.
 | Text spacing | 1.4.12 | Applies the standard spacing overrides, then flags **newly** clipped text (pre-existing clipping is baselined out) |
 | Focus visibility | 2.4.7 | Badges tab order; flags focusables with no detectable focus indicator (style-diff + CSSOM `:focus`/`:focus-visible` analysis, confidence-graded) |
 | Target size | 2.5.8 | Flags interactive targets under 24×24 px, with the spacing and inline exceptions approximated |
-| Hover/focus content | 1.4.13 | Flags `title` tooltips; discovers CSS reveal-on-hover/focus content, triggers it with **real** CDP mouse events, and tests Escape dismissability |
+| Hover/focus content | 1.4.13 + title triage | Triages `title` tooltips (exempt from 1.4.13 as user-agent-controlled): redundant titles → `warn`, titles carrying unique info → `review` under 2.4.4/1.3.1, title-as-only-label fields → `review` under 3.3.2. Separately discovers CSS reveal-on-hover/focus content, triggers it with **real** CDP mouse events, and tests Escape dismissability (author-built tooltips do fail 1.4.13) |
 | Reflow scan | 1.4.10 | With the 320 px override on, reports elements that force horizontal scrolling (tables/images/code flagged for review, not failure) |
 | Accessible names | 4.1.2 | Batch-flags interactive elements with empty accessible names + a hover-to-inspect tooltip showing role/name/source (Escape exits) |
 
 ### Report
 
-- Findings aggregate per tab; severity is `fail` / `warn` / `review` (heuristics are graded honestly — `review` means "verify by hand").
-- **Export CSV** (Excel-safe RFC 4180). Columns: tool, wcag, severity, selector, snippet, details, url, timestamp, status.
+- Findings aggregate per tab **and per page** — navigating the tab to a different URL starts a fresh report, so one export never mixes sites; severity is `fail` / `warn` / `review` (heuristics are graded honestly — `review` means "verify by hand").
+- **Export CSV** (Excel-safe RFC 4180). A two-line header names the run URL and export time, then columns: tool, wcag, severity, selector, snippet, details, url, timestamp, status.
 - **Run-over-run diff**: re-running a checker marks each finding `new` or `existing` and reports `resolved` ones, persisted per URL+tool across browser restarts.
+- **Clear all checkers** resets everything in one click — removes on-page artifacts (overlay badges, text-spacing overrides, the accname inspector) and clears the tab's findings. **Clear overlays** and **Clear findings** remain for granular resets.
 
 ## The debugger infobar
 
