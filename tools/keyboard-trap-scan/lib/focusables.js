@@ -16,6 +16,39 @@ window.__kt = (function () {
     return (window.CSS && CSS.escape) ? CSS.escape(v) : v;
   }
 
+  // Anchor priority mirrors checkers/lib/selector.js: unique #id, then unique
+  // stable data attributes, then an nth-of-type chain. Keeping this identical
+  // is what makes CSV output diffable against the extension's.
+  const DATA_ATTRS = ['data-testid', 'data-test', 'data-id', 'data-name'];
+
+  // NOTE: this whole helper lives inside a template literal, where backslash
+  // escapes collapse — build the escaping without any backslash literals.
+  function attrValueEscape(v) {
+    var BS = String.fromCharCode(92);
+    return v.split(BS).join(BS + BS).split('"').join(BS + '"');
+  }
+
+  function isUnique(sel, el) {
+    try {
+      const found = document.querySelectorAll(sel);
+      return found.length === 1 && found[0] === el;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function anchorFor(el) {
+    if (el.id && isUnique('#' + esc(el.id), el)) return '#' + esc(el.id);
+    for (const attr of DATA_ATTRS) {
+      const v = el.getAttribute && el.getAttribute(attr);
+      if (v) {
+        const sel = '[' + attr + '="' + attrValueEscape(v) + '"]';
+        if (isUnique(sel, el)) return sel;
+      }
+    }
+    return null;
+  }
+
   function segment(el) {
     const tag = el.tagName.toLowerCase();
     const parent = el.parentNode;
@@ -27,12 +60,14 @@ window.__kt = (function () {
 
   function selector(el) {
     if (!el || !el.tagName) return '(unknown)';
-    if (el.id) return '#' + esc(el.id);
+    const direct = anchorFor(el);
+    if (direct) return direct;
     const segments = [segment(el)];
     let node = el.parentElement;
     while (node && segments.length < 8) {
-      if (node.id) {
-        segments.unshift('#' + esc(node.id));
+      const anchor = anchorFor(node);
+      if (anchor) {
+        segments.unshift(anchor);
         return segments.join(' > ');
       }
       segments.unshift(segment(node));

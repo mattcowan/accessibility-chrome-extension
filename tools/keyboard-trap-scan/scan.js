@@ -17,19 +17,37 @@ import { chromium } from 'playwright';
 import { HELPERS_SOURCE } from './lib/focusables.js';
 import { toCsv } from './lib/csv.js';
 
+const USAGE = 'Usage: node scan.js <url> [--max-tabs 200] [--out report.csv] [--headed]';
+
+function usageError(message) {
+  console.error(`${message}\n${USAGE}`);
+  process.exit(2);
+}
+
 function parseArgs(argv) {
   const args = { url: null, maxTabs: 200, out: 'report.csv', headed: false };
+  const valueFor = (flag, i) => {
+    const v = argv[i];
+    if (v === undefined || v.startsWith('--')) usageError(`${flag} requires a value.`);
+    return v;
+  };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--max-tabs') args.maxTabs = parseInt(argv[++i], 10) || 200;
-    else if (a === '--out') args.out = argv[++i];
-    else if (a === '--headed') args.headed = true;
-    else if (!a.startsWith('--') && !args.url) args.url = a;
+    if (a === '--max-tabs') {
+      const n = parseInt(valueFor(a, ++i), 10);
+      if (!Number.isInteger(n) || n < 1) usageError('--max-tabs must be a positive integer.');
+      args.maxTabs = n;
+    } else if (a === '--out') {
+      args.out = valueFor(a, ++i);
+    } else if (a === '--headed') {
+      args.headed = true;
+    } else if (!a.startsWith('--') && !args.url) {
+      args.url = a;
+    } else {
+      usageError(`Unknown argument: ${a}`);
+    }
   }
-  if (!args.url) {
-    console.error('Usage: node scan.js <url> [--max-tabs 200] [--out report.csv] [--headed]');
-    process.exit(2);
-  }
+  if (!args.url) usageError('A URL to scan is required.');
   return args;
 }
 
@@ -47,7 +65,7 @@ function finding(url, severity, selector, details) {
   };
 }
 
-// Do the last 2k entries of seq form the same cycle of length k twice?
+// Do the last 2*k entries of seq form the same cycle of length k twice?
 function detectCycle(seq) {
   for (let k = 2; k <= 12; k++) {
     if (seq.length < 2 * k) continue;
@@ -129,6 +147,9 @@ async function main() {
     seen.add(d.id);
     consecutiveSame = prev && prev.id === d.id ? consecutiveSame + 1 : 0;
 
+    // 3 consecutive visits (two absorbed Tab presses): conservative on purpose
+    // — one repeat can be a benign focus-management bounce, while a truly
+    // stuck element keeps absorbing Tabs and still triggers one press later.
     if (consecutiveSame >= 2) {
       trap = { members: [d], kind: 'stuck' };
     } else {

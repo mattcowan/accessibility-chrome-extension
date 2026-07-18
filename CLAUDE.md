@@ -74,6 +74,11 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   one) — two test fixtures were originally broken this way.
 - Under `setDeviceMetricsOverride({width:320})`, `documentElement.clientWidth` reads
   ~305 (scrollbar excluded). Assert ranges, not equality.
+- `HELPERS_SOURCE` in `tools/keyboard-trap-scan/lib/focusables.js` is code inside a
+  template literal: backslash escapes collapse once, so a regex like `/\\/g` becomes
+  invalid in the injected script and `window.__kt` silently never installs. Write that
+  code backslash-free (e.g. `String.fromCharCode(92)`) and parse-check with
+  `new Function(HELPERS_SOURCE)` after editing.
 - `chrome.debugger` conflicts with open DevTools on the same tab (friendly error is
   mapped in debugger-manager); it coexists fine with Playwright's CDP connection.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,

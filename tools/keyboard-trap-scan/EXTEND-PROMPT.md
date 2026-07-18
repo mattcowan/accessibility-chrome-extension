@@ -14,7 +14,7 @@ You are extending a Playwright-based WCAG 2.1.2 keyboard-trap scanner. The codeb
 - `lib/csv.js`: Writes RFC 4180 CSV with columns: `tool`, `wcag`, `severity`, `selector`, `snippet`, `details`, `url`, `timestamp`, `status`. Includes UTF-8 BOM for Excel.
 
 **Detection Algorithm (summary):**
-The scanner presses Tab repeatedly, tracking each focused element's ID. It detects three trap patterns: (1) the same element focused 2+ times consecutively (stuck), (2) a repeating sequence of distinct elements while unvisited focusables exist (cycle), (3) focus returning to `<body>` before reaching 90% of detected focusables (lost focus). When a trap is detected, it probes escapability: Shift+Tab up to `cycleLen + 1` times, then Escape followed by Tab. If neither escapes, it's a 'fail' and the scan stops. If either escapes, it's a 'warn'. Exit code 1 = fail, 0 = clean/warn, 2 = crash.
+The scanner presses Tab repeatedly, tracking each focused element's ID. It detects three trap patterns: (1) the same element focused 3+ times consecutively — i.e. two absorbed Tab presses; the deliberately conservative threshold avoids false positives from one-off focus-management bounces, and a genuinely stuck element always keeps absorbing Tabs so nothing is missed (stuck), (2) a repeating sequence of distinct elements while unvisited focusables exist (cycle), (3) focus returning to `<body>` before reaching 90% of detected focusables (lost focus). When a trap is detected, it probes escapability: Shift+Tab up to `cycleLen + 1` times, then Escape followed by Tab. If neither escapes, it's a 'fail' and the scan stops. If either escapes, it's a 'warn'. Exit code 1 = fail, 0 = clean/warn, 2 = crash.
 
 **Known Limitations:**
 - Initial state only (no clicking/interaction).

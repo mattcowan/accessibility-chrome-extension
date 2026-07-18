@@ -1,0 +1,8 @@
+# Dependencies (package-lock.json IS committed; installs are reproducible)
+node_modules/
+
+# Claude Code session-ephemeral state
+.claude/scheduled_tasks.lock
+
+# Scanner output
+tools/keyboard-trap-scan/report.csv
