@@ -3,6 +3,12 @@
 
 import * as dbg from './debugger-manager.js';
 
+// The side panel reuses popup.html; the query flag tells popup.js it is
+// long-lived (track tab switches/navigations). Manifest default_path can't
+// carry a query string reliably, so set it here — this top-level statement
+// runs on every SW wake, which is deterministic enough.
+chrome.sidePanel?.setOptions({ path: 'popup/popup.html?context=panel' }).catch(() => {});
+
 function broadcast(tabId, state, reason = null) {
   chrome.runtime.sendMessage({ type: 'stateChanged', tabId, state, reason }).catch(() => {});
 }

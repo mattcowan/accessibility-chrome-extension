@@ -1,5 +1,7 @@
 // RFC 4180 CSV writer (Node side). Sibling of the extension's popup/csv.js —
 // keep the column set in sync by hand (no shared build step by design).
+// The popup sibling also has generic buildCsv/downloadTable helpers (used by
+// its live-region log export) — those are popup-only, intentionally not here.
 
 export const COLUMNS = [
   'tool',

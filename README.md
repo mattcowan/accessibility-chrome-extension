@@ -25,24 +25,63 @@ keyboard-trap scanner.
   1.4.10 test condition — and shows content magnified as a low-vision user sees it)
 - **Vision simulation** — protanopia, deuteranopia, tritanopia, achromatopsia, blurred vision, reduced contrast (Chrome's built-in colorimetric simulations; one at a time)
 
-### Checkers (run on demand from the popup)
+### Checkers (run on demand from the popup or side panel)
 
 | Checker | WCAG | What it does |
 |---|---|---|
-| Motion respect | 2.3.3 / 2.2.2 | With reduced-motion emulated, reports animations and autoplaying media still running |
+| Motion respect | 2.3.3 / 2.2.2 | With reduced-motion emulated, reports animations and autoplaying media still running. The row has its own **Reduced motion** toggle (same emulation as the toggle up top) so you can flip it and re-run in place |
 | Text spacing | 1.4.12 | Applies the standard spacing overrides, then flags **newly** clipped text (pre-existing clipping is baselined out) |
 | Focus visibility | 2.4.7 | Badges tab order; flags focusables with no detectable focus indicator (style-diff + CSSOM `:focus`/`:focus-visible` analysis, confidence-graded) |
 | Target size | 2.5.8 | Flags interactive targets under 24×24 px, with the spacing and inline exceptions approximated |
 | Hover/focus content | 1.4.13 + title triage | Triages `title` tooltips (exempt from 1.4.13 as user-agent-controlled): redundant titles → `warn`, titles carrying unique info → `review` under 2.4.4/1.3.1, title-as-only-label fields → `review` under 3.3.2. Separately discovers CSS reveal-on-hover/focus content, triggers it with **real** CDP mouse events, and tests Escape dismissability (author-built tooltips do fail 1.4.13) |
 | Reflow scan | 1.4.10 | With the 320 px override on, reports elements that force horizontal scrolling (tables/images/code flagged for review, not failure) |
 | Accessible names | 4.1.2 | Batch-flags interactive elements with empty accessible names + a hover-to-inspect tooltip showing role/name/source (Escape exits) |
+| Live regions | 4.1.3 | Start/stop monitor that finds every live region (`aria-live`, `role=status/log/alert`, `<output>`) and attaches a visible on-page log panel to each — green **polite** / red **assertive** tag, every announcement appended with a timestamp, never overwritten. **Export log** downloads the accumulated messages as their own CSV (selector, politeness, role, message, timestamp, url). Regions added after start get panels too (they just don't count toward the start-time badge — restart the monitor to refresh it). Stopping the monitor discards the log, so export first |
+
+### Run selected (batch)
+
+Each batchable checker row has a checkbox; **Run selected** runs the ticked ones
+sequentially (checkers share the page, focus, and mouse — parallel would corrupt
+results) and updates each badge as it completes. The selection is remembered across
+sessions. Notes:
+
+- The **Reflow scan** checkbox is only enabled while the Reflow emulation toggle is on.
+- The hover row has two checkboxes: **static** (fast CSS analysis; skipped-probe
+  candidates are reported as `review`) and **probe** (the full pointer probe — slow,
+  moves the real mouse; off by default). Selecting probe subsumes static.
+- Text spacing's analyze pass removes its spacing overrides again at the end of a batch
+  so they can't skew other checkers (running it from its own button leaves them
+  applied, as before).
+- The stateful tools (text-spacing apply/remove, accname inspector, live-regions
+  monitor) are not batchable.
 
 ### Report
 
 - Findings aggregate per tab **and per page** — navigating the tab to a different URL starts a fresh report, so one export never mixes sites; severity is `fail` / `warn` / `review` (heuristics are graded honestly — `review` means "verify by hand").
+- Findings are grouped by checker with the full detail text visible. **Click a finding
+  to reveal it live on the page** — the element is scrolled into view and outlined in
+  its severity color; **Highlight all** outlines a checker's whole set at once (no
+  scrolling). Page-level findings (`(page)`) aren't clickable. If the page re-rendered
+  since the run, a not-found message suggests re-running the checker. For findings
+  inside iframes, the highlight lands in the iframe and scrolling happens within it.
 - **Export CSV** (Excel-safe RFC 4180). A two-line header names the run URL and export time, then columns: tool, wcag, severity, selector, snippet, details, url, timestamp, status.
 - **Run-over-run diff**: re-running a checker marks each finding `new` or `existing` and reports `resolved` ones, persisted per URL+tool across browser restarts.
 - **Clear all checkers** resets everything in one click — removes on-page artifacts (overlay badges, text-spacing overrides, the accname inspector) and clears the tab's findings. **Clear overlays** and **Clear findings** remain for granular resets.
+
+### Side panel
+
+**Open in side panel** (top of the popup) docks the same UI in Chrome's side panel,
+where it stays open while you interact with the page — no more popup closing on every
+click. The panel follows your active tab (switching tabs or navigating re-syncs its
+state, badges, and report). One caveat inherited from the activeTab permission model:
+after a navigation, checker injection needs a fresh grant — **click the extension's
+toolbar icon on that tab** (the popup that opens can be dismissed) and re-run.
+Emulation toggles are unaffected; they work through the debugger permission.
+
+The extension asks for the `tabs` permission ("read your browsing history" in the
+install warning) solely so the side panel can see the active tab's URL when following
+tab switches; the `debugger` permission it already holds exposes tab URLs anyway, so
+this adds no real access.
 
 ## The debugger infobar
 

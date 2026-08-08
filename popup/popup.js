@@ -1,17 +1,25 @@
 // Popup: emulation controls (via the service worker / CDP), checker runner
 // (direct chrome.scripting injection under activeTab), findings store with
-// run-over-run diff, and CSV export.
+// run-over-run diff, and CSV export. The same page also serves as the Chrome
+// side panel (?context=panel), where it additionally tracks the active tab.
 
-import { downloadCsv } from './csv.js';
+import { downloadCsv, downloadTable } from './csv.js';
 
 const LIBS = ['checkers/lib/selector.js', 'checkers/lib/findings.js'];
 const OVERLAY = 'checkers/lib/overlay.js';
+const LIVE_FILES = [...LIBS, 'checkers/live-regions.js'];
+const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
 
 const $ = (id) => document.getElementById(id);
 const fingerprint = (f) => `${f.tool}|${f.wcag}|${f.selector}`;
 
+// Same page serves as action popup and as the Chrome side panel; the SW
+// registers the panel path with ?context=panel so we know which we are.
+const IS_PANEL = new URLSearchParams(location.search).get('context') === 'panel';
+
 let tab = null;
 let restricted = false;
+let lastState = null; // latest emulation state from the SW (renderState keeps it fresh)
 
 // ---------------------------------------------------------------- utilities
 
@@ -79,7 +87,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function checkerError(e) {
   const msg = e && e.message ? e.message : String(e);
   if (/cannot access|activeTab|permission/i.test(msg)) {
-    banner('Cannot access this page. If you navigated after opening the popup, close and reopen it to re-grant access.');
+    banner(
+      IS_PANEL
+        ? 'Cannot access this page from the side panel. Click the extension toolbar icon on this tab to re-grant access, then re-run. (Emulation toggles keep working regardless.)'
+        : 'Cannot access this page. If you navigated after opening the popup, close and reopen it to re-grant access.'
+    );
   } else {
     banner(`Checker failed: ${msg}`);
   }
@@ -88,6 +100,7 @@ function checkerError(e) {
 // ------------------------------------------------------- emulation controls
 
 function renderState(state, caps) {
+  lastState = state;
   $('toggle-reduced-motion').checked = state.media['prefers-reduced-motion'] === 'reduce';
   const scheme = state.media['prefers-color-scheme'] || '';
   document.querySelector(`input[name="color-scheme"][value="${scheme}"]`).checked = true;
@@ -101,6 +114,9 @@ function renderState(state, caps) {
   const reflowInput = document.querySelector(`input[name="reflow"][value="${reflow}"]`);
   if (reflowInput) reflowInput.checked = true;
   $('run-reflow-scan').disabled = !state.reflow;
+  const reflowBatchBox = document.querySelector('.batch-select[data-batch-id="reflow"]');
+  if (reflowBatchBox) reflowBatchBox.disabled = !state.reflow;
+  $('toggle-reduced-motion-inline').checked = state.media['prefers-reduced-motion'] === 'reduce';
   const vision = state.visionDeficiency || 'none';
   const visionInput = document.querySelector(`input[name="vision"][value="${vision}"]`);
   if (visionInput) visionInput.checked = true;
@@ -126,6 +142,14 @@ async function applySetting(msg, revert) {
 
 function wireEmulation() {
   $('toggle-reduced-motion').addEventListener('change', (e) =>
+    applySetting(
+      { type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: e.target.checked ? 'reduce' : null },
+      () => (e.target.checked = !e.target.checked)
+    )
+  );
+  // Inline twin of the toggle above, living in the Motion checker row.
+  // renderState keeps both in sync from the same SW state.
+  $('toggle-reduced-motion-inline').addEventListener('change', (e) =>
     applySetting(
       { type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: e.target.checked ? 'reduce' : null },
       () => (e.target.checked = !e.target.checked)
@@ -225,6 +249,7 @@ const BADGE_BY_TOOL = {
   'hover-content': 'badge-hover',
   reflow: 'badge-reflow',
   accname: 'badge-accname',
+  'live-regions': 'badge-live-regions',
 };
 
 function renderBadge(tool, findings) {
@@ -268,14 +293,64 @@ function allFindings(store) {
   return { current, resolved };
 }
 
+let lastStore = null;
+const expandedTools = new Set(); // tools whose group shows all rows (past the cap)
+const GROUP_ROW_CAP = 30;
+
+const isRevealable = (sel) => sel && sel !== '(page)' && sel !== '(unknown)';
+
+function findingRow(f) {
+  const li = document.createElement('li');
+  li.className = 'finding';
+  const clickable = isRevealable(f.selector);
+  const container = document.createElement(clickable ? 'button' : 'div');
+  if (clickable) {
+    container.type = 'button';
+    container.className = 'finding-reveal';
+    container.dataset.selector = f.selector;
+    container.dataset.severity = f.severity;
+    container.title = 'Scroll to and highlight this element on the page';
+  } else {
+    container.className = 'finding-static';
+  }
+
+  const head = document.createElement('div');
+  head.className = 'finding-head';
+  const sev = document.createElement('span');
+  sev.className = `sev sev-${f.severity}`;
+  sev.textContent = f.severity;
+  const wcag = document.createElement('span');
+  wcag.className = 'wcag';
+  wcag.textContent = f.wcag;
+  const sel = document.createElement('code');
+  sel.className = 'sel';
+  sel.textContent = f.selector;
+  head.append(sev, wcag, sel);
+  if (f.status === 'new') {
+    const chip = document.createElement('span');
+    chip.className = 'chip-new';
+    chip.textContent = 'new';
+    head.appendChild(chip);
+  }
+
+  const det = document.createElement('div');
+  det.className = 'finding-details';
+  det.textContent = f.details || '';
+
+  container.append(head, det);
+  li.appendChild(container);
+  return li;
+}
+
 function renderReport(store) {
+  lastStore = store;
   for (const [tool, data] of Object.entries(store.tools)) {
     renderBadge(tool, data.findings);
   }
   const { current, resolved } = allFindings(store);
   if (!current.length && !resolved.length) {
     $('report-summary').textContent = 'No findings yet.';
-    $('findings-list').replaceChildren();
+    $('findings-groups').replaceChildren();
     return;
   }
   const count = (sev) => current.filter((f) => f.severity === sev).length;
@@ -285,49 +360,183 @@ function renderReport(store) {
     `${count('review')} review. Vs last run: ${fresh} new, ${current.length - fresh} existing, ` +
     `${resolved.length} resolved.`;
 
-  const list = $('findings-list');
-  list.replaceChildren();
-  for (const f of current.slice(0, 20)) {
-    const li = document.createElement('li');
-    li.textContent = `[${f.severity}] ${f.tool} ${f.wcag} — ${f.selector}`;
-    li.title = f.details;
-    list.appendChild(li);
+  const groups = $('findings-groups');
+  // Keep groups the user opened open across re-renders.
+  const openTools = new Set(
+    [...groups.querySelectorAll('details.tool-group[open]')].map((d) => d.dataset.tool)
+  );
+  groups.replaceChildren();
+  for (const [tool, data] of Object.entries(store.tools)) {
+    const findings = data.findings;
+    if (!findings.length) continue;
+    const group = document.createElement('details');
+    group.className = 'tool-group';
+    group.dataset.tool = tool;
+    if (openTools.has(tool)) group.open = true;
+    const c = (sev) => findings.filter((f) => f.severity === sev).length;
+    const summary = document.createElement('summary');
+    summary.textContent = `${tool} — ${c('fail')} fail, ${c('warn')} warn, ${c('review')} review`;
+    group.appendChild(summary);
+
+    if (findings.some((f) => isRevealable(f.selector))) {
+      const actions = document.createElement('div');
+      actions.className = 'group-actions';
+      const hl = document.createElement('button');
+      hl.type = 'button';
+      hl.className = 'highlight-all secondary';
+      hl.dataset.tool = tool;
+      hl.textContent = 'Highlight all';
+      hl.title = 'Outline every finding of this checker on the page (no scrolling)';
+      actions.appendChild(hl);
+      group.appendChild(actions);
+    }
+
+    const ul = document.createElement('ul');
+    ul.className = 'tool-findings';
+    const cap = expandedTools.has(tool) ? findings.length : GROUP_ROW_CAP;
+    for (const f of findings.slice(0, cap)) ul.appendChild(findingRow(f));
+    group.appendChild(ul);
+    if (findings.length > cap) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'show-all secondary';
+      more.dataset.tool = tool;
+      more.textContent = `Show all ${findings.length}`;
+      group.appendChild(more);
+    }
+    groups.appendChild(group);
   }
-  if (current.length > 20) {
-    const li = document.createElement('li');
-    li.textContent = `… ${current.length - 20} more (see CSV export)`;
-    list.appendChild(li);
+}
+
+// -------------------------------------------------- reveal findings on page
+
+async function revealFinding({ selector, severity }) {
+  banner('');
+  try {
+    await inject(['checkers/lib/resolve.js', OVERLAY], true);
+    // All frames: findings are collected allFrames, so the selector may live in
+    // an iframe — the highlight lands wherever it matches (a generic selector
+    // can match in more than one frame; scrolling inside an iframe scrolls
+    // that iframe's viewport, not the top page).
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: (sel, sev) => {
+        const el = globalThis.__a11yResolve(sel);
+        if (!el) return false;
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        globalThis.__a11yOverlay.outline(el, sev);
+        globalThis.__a11yOverlay.badge(el, sev.charAt(0).toUpperCase(), sev);
+        return true;
+      },
+      args: [selector, severity],
+    });
+    if (!results.some((r) => r.result === true)) {
+      banner('Element not found on the page — it may have been removed or re-rendered. Re-run the checker to refresh findings.');
+    }
+  } catch (e) {
+    checkerError(e);
+  }
+}
+
+async function highlightAllForTool(tool) {
+  banner('');
+  try {
+    const store = await getStore();
+    const items = ((store.tools[tool] && store.tools[tool].findings) || [])
+      .filter((f) => isRevealable(f.selector))
+      .map((f) => ({ selector: f.selector, severity: f.severity }));
+    if (!items.length) return;
+    await inject(['checkers/lib/resolve.js', OVERLAY], true);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: (list) => {
+        let hit = 0;
+        for (const item of list) {
+          const el = globalThis.__a11yResolve(item.selector);
+          if (!el) continue;
+          globalThis.__a11yOverlay.outline(el, item.severity);
+          globalThis.__a11yOverlay.badge(el, item.severity.charAt(0).toUpperCase(), item.severity);
+          hit++;
+        }
+        return hit;
+      },
+      args: [items],
+    });
+    const hit = results.reduce((n, r) => n + (r.result || 0), 0);
+    announce(`${tool}: highlighted ${Math.min(hit, items.length)} of ${items.length}`);
+  } catch (e) {
+    checkerError(e);
   }
 }
 
 // ------------------------------------------------------------ checker wiring
 
-async function runSimpleChecker(button, tool, files, fnName, { allFrames = false, arg = null } = {}) {
-  button.disabled = true;
-  banner('');
-  try {
-    await inject([...LIBS, ...files], allFrames);
-    const results = await callChecker(fnName, arg, allFrames);
-    const merged = results.flatMap((r) => (Array.isArray(r.result) ? r.result : []));
-    const { findings } = await storeToolFindings(tool, merged);
-    announce(`${tool}: ${findings.length} findings`);
-  } catch (e) {
-    checkerError(e);
-  } finally {
-    button.disabled = false;
-  }
+// Declarative checker registry: drives both the per-row Run buttons and the
+// batch "Run selected" loop. Registry order IS the batch order — text-spacing
+// runs after target-size/reflow (its analyze pass applies the override
+// stylesheet, which would skew their measurements) and the slow hover probe
+// runs last. The stateful toggles (text-spacing apply/remove, accname
+// inspector, live-regions monitor) are deliberately not batchable and stay
+// outside the registry.
+const CHECKERS = [
+  { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
+    files: ['checkers/motion-check.js'], fnName: 'motion', allFrames: true,
+    batchDefault: true },
+  { id: 'focus-visibility', tool: 'focus-visibility', buttonId: 'run-focus', kind: 'simple',
+    files: [OVERLAY, 'checkers/focus-walker.js'], fnName: 'focusWalker',
+    batchDefault: true },
+  { id: 'target-size', tool: 'target-size', buttonId: 'run-target-size', kind: 'simple',
+    files: [OVERLAY, 'checkers/target-size.js'], fnName: 'targetSize', allFrames: true,
+    batchDefault: true },
+  { id: 'reflow', tool: 'reflow', buttonId: 'run-reflow-scan', kind: 'simple',
+    files: ['checkers/reflow-scan.js'], fnName: 'reflowScan',
+    gate: () => !!(lastState && lastState.reflow),
+    gateHint: 'enable the Reflow test toggle first',
+    batchDefault: true },
+  { id: 'text-spacing-analyze', tool: 'text-spacing', buttonId: 'run-text-spacing', kind: 'simple',
+    files: ['checkers/text-spacing.js'], fnName: 'textSpacing', allFrames: true, arg: 'analyze',
+    after: () => { $('toggle-text-spacing').textContent = 'Remove overrides'; },
+    // Batch only: the analyze pass leaves the overrides applied (matching the
+    // single-button behavior); in a batch we remove them so they can't skew
+    // anything and the page is left untouched.
+    batchCleanup: async () => {
+      await callChecker('textSpacing', 'remove', true);
+      $('toggle-text-spacing').textContent = 'Apply overrides';
+    },
+    batchDefault: true },
+  { id: 'hover-static', tool: 'hover-content', buttonId: null, kind: 'hover',
+    probe: false, batchDefault: true },
+  { id: 'hover-probe', tool: 'hover-content', buttonId: 'run-hover', kind: 'hover',
+    probe: true, batchDefault: false },
+];
+
+async function execChecker(entry) {
+  const allFrames = entry.allFrames === true;
+  await inject([...LIBS, ...entry.files], allFrames);
+  const results = await callChecker(entry.fnName, entry.arg ?? null, allFrames);
+  const merged = results.flatMap((r) => (Array.isArray(r.result) ? r.result : []));
+  const { findings } = await storeToolFindings(entry.tool, merged);
+  if (entry.after) entry.after();
+  return { tool: entry.tool, count: findings.length };
 }
 
-async function runHoverChecker(button) {
-  button.disabled = true;
-  banner('');
+async function execHover(entry) {
   let probing = false;
   try {
     await inject([...LIBS, 'checkers/lib/accname.js', 'checkers/hover-content.js']);
     const [top] = await callChecker('hoverStatic');
     const { findings, candidates } = top.result;
 
-    if (candidates.length) {
+    if (candidates.length && !entry.probe) {
+      findings.push({
+        tool: 'hover-content',
+        wcag: '1.4.13',
+        severity: 'review',
+        selector: '(page)',
+        snippet: '',
+        details: `${candidates.length} hover/focus-reveal candidates found; the dynamic dismissability probe was skipped (batch static pass). Run the full Hover/focus content checker to verify Escape-dismissability.`,
+      });
+    } else if (candidates.length) {
       const start = await send({ type: 'hoverProbe', action: 'start' });
       if (!start.ok) {
         findings.push({
@@ -363,13 +572,95 @@ async function runHoverChecker(button) {
       }
     }
     const stored = await storeToolFindings('hover-content', findings);
-    announce(`hover-content: ${stored.findings.length} findings`);
+    return { tool: 'hover-content', count: stored.findings.length };
+  } finally {
+    if (probing) await send({ type: 'hoverProbe', action: 'end' }).catch(() => {});
+  }
+}
+
+function execEntry(entry) {
+  return entry.kind === 'hover' ? execHover(entry) : execChecker(entry);
+}
+
+async function runFromButton(button, entry) {
+  button.disabled = true;
+  banner('');
+  try {
+    const { tool, count } = await execEntry(entry);
+    announce(`${tool}: ${count} findings`);
   } catch (e) {
     checkerError(e);
   } finally {
-    if (probing) await send({ type: 'hoverProbe', action: 'end' }).catch(() => {});
     button.disabled = false;
   }
+}
+
+// ------------------------------------------------------------- batch running
+
+async function initBatchSelection() {
+  const stored = (await chrome.storage.local.get('batchSelection')).batchSelection || {};
+  for (const box of document.querySelectorAll('.batch-select')) {
+    const id = box.dataset.batchId;
+    const entry = CHECKERS.find((c) => c.id === id);
+    if (!entry) {
+      // data-batch-id in popup.html and CHECKERS[].id are a hand-synced pair.
+      console.warn(`Batch checkbox has no matching CHECKERS entry: ${id}`);
+      continue;
+    }
+    box.checked = Object.prototype.hasOwnProperty.call(stored, id)
+      ? !!stored[id]
+      : !!entry.batchDefault;
+    box.addEventListener('change', async () => {
+      const cur = (await chrome.storage.local.get('batchSelection')).batchSelection || {};
+      cur[id] = box.checked;
+      await chrome.storage.local.set({ batchSelection: cur });
+    });
+  }
+}
+
+async function runBatch() {
+  const btn = $('run-selected');
+  btn.disabled = true;
+  banner('');
+  const selected = new Set(
+    [...document.querySelectorAll('.batch-select')]
+      .filter((b) => b.checked && !b.disabled)
+      .map((b) => b.dataset.batchId)
+  );
+  // The full probe runs the static pass itself — don't do it twice.
+  if (selected.has('hover-probe')) selected.delete('hover-static');
+  const queue = CHECKERS.filter((e) => selected.has(e.id));
+  if (!queue.length) {
+    banner('Nothing selected — tick the checkbox on at least one checker.');
+    btn.disabled = false;
+    return;
+  }
+  const errors = [];
+  let total = 0;
+  let ran = 0;
+  let i = 0;
+  for (const entry of queue) {
+    $('batch-progress').textContent = `${++i}/${queue.length}: ${entry.tool}…`;
+    if (entry.gate && !entry.gate()) {
+      errors.push(`${entry.tool}: skipped — ${entry.gateHint || 'not available'}`);
+      continue;
+    }
+    try {
+      const { count } = await execEntry(entry);
+      total += count;
+      ran++;
+      if (entry.batchCleanup) await entry.batchCleanup();
+    } catch (e) {
+      errors.push(`${entry.tool}: ${e && e.message ? e.message : e}`);
+    }
+  }
+  $('batch-progress').textContent = '';
+  announce(
+    `Batch complete: ${total} findings across ${ran} checker${ran === 1 ? '' : 's'}` +
+      (errors.length ? `; ${errors.length} skipped/failed` : '')
+  );
+  if (errors.length) banner(errors.join(' · '));
+  btn.disabled = false;
 }
 
 async function refreshTextSpacingButton() {
@@ -395,10 +686,26 @@ async function refreshAccnameButton() {
   }
 }
 
+async function refreshLiveRegionsButton() {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.documentElement.dataset.a11yLiveMonitor === 'on',
+    });
+    $('toggle-live-regions').textContent = res.result ? 'Stop monitor' : 'Start monitor';
+  } catch {
+    // leave default label
+  }
+}
+
 function wireCheckers() {
-  $('run-motion').addEventListener('click', (e) =>
-    runSimpleChecker(e.target, 'motion', ['checkers/motion-check.js'], 'motion', { allFrames: true })
-  );
+  for (const entry of CHECKERS) {
+    if (!entry.buttonId) continue;
+    const btn = $(entry.buttonId);
+    btn.addEventListener('click', () => runFromButton(btn, entry));
+  }
+
+  $('run-selected').addEventListener('click', runBatch);
 
   $('toggle-text-spacing').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -413,30 +720,6 @@ function wireCheckers() {
       e.target.disabled = false;
     }
   });
-
-  $('run-text-spacing').addEventListener('click', async (e) => {
-    await runSimpleChecker(e.target, 'text-spacing', ['checkers/text-spacing.js'], 'textSpacing', {
-      allFrames: true,
-      arg: 'analyze',
-    });
-    $('toggle-text-spacing').textContent = 'Remove overrides';
-  });
-
-  $('run-focus').addEventListener('click', (e) =>
-    runSimpleChecker(e.target, 'focus-visibility', [OVERLAY, 'checkers/focus-walker.js'], 'focusWalker')
-  );
-
-  $('run-target-size').addEventListener('click', (e) =>
-    runSimpleChecker(e.target, 'target-size', [OVERLAY, 'checkers/target-size.js'], 'targetSize', {
-      allFrames: true,
-    })
-  );
-
-  $('run-hover').addEventListener('click', (e) => runHoverChecker(e.target));
-
-  $('run-reflow-scan').addEventListener('click', (e) =>
-    runSimpleChecker(e.target, 'reflow', ['checkers/reflow-scan.js'], 'reflowScan')
-  );
 
   $('toggle-accname').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -458,6 +741,56 @@ function wireCheckers() {
     }
   });
 
+  $('toggle-live-regions').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await inject(LIVE_FILES);
+      const starting = e.target.textContent.startsWith('Start');
+      const [res] = await callChecker('liveRegions', starting ? 'start' : 'stop');
+      if (starting) {
+        const { findings } = await storeToolFindings('live-regions', res.result.findings);
+        announce(
+          `live-regions: monitoring ${findings.length} region${findings.length === 1 ? '' : 's'} — ` +
+            'interact with the page; the on-page log panels update live'
+        );
+        e.target.textContent = 'Stop monitor';
+      } else {
+        e.target.textContent = 'Start monitor';
+        announce('live-regions: monitor stopped; its log has been discarded.');
+      }
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+
+  $('export-live-log').addEventListener('click', async () => {
+    try {
+      await inject(LIVE_FILES);
+      const [res] = await callChecker('liveRegions', 'export');
+      const rows = res.result || [];
+      if (!rows.length) {
+        banner('No announcements logged yet — start the monitor and trigger page updates first. (Stopping the monitor discards its log.)');
+        return;
+      }
+      for (const r of rows) r.url = tab.url;
+      let host = 'page';
+      try {
+        host = new URL(tab.url).hostname || 'page';
+      } catch {
+        // keep default
+      }
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      downloadTable(LIVE_LOG_COLUMNS, rows, `a11y-live-log-${host}-${stamp}.csv`, {
+        url: tab.url,
+        exported: new Date().toISOString(),
+      });
+    } catch (e) {
+      checkerError(e);
+    }
+  });
+
   $('clear-overlays').addEventListener('click', async () => {
     try {
       await inject([OVERLAY], true);
@@ -471,8 +804,9 @@ function wireCheckers() {
   });
 
   // Full reset: every artifact a checker leaves on the page (overlay layer,
-  // text-spacing override stylesheet, live accname inspector), plus this
-  // tab's stored findings. Motion/reflow/hover leave nothing behind.
+  // text-spacing override stylesheet, live accname inspector, live-region log
+  // panels), plus this tab's stored findings. Motion/reflow/hover leave
+  // nothing behind.
   $('clear-all-checkers').addEventListener('click', async (e) => {
     e.target.disabled = true;
     banner('');
@@ -488,8 +822,11 @@ function wireCheckers() {
       await inject([...LIBS, 'checkers/lib/accname.js', 'checkers/accname-inspector.js']);
       await callChecker('accnameInspector', 'stop');
       $('toggle-accname').textContent = 'Start inspector';
+      await inject(LIVE_FILES);
+      await callChecker('liveRegions', 'stop');
+      $('toggle-live-regions').textContent = 'Start monitor';
       await clearFindingsStore();
-      announce('Cleared overlays, spacing overrides, inspector, and findings for this tab.');
+      announce('Cleared overlays, spacing overrides, inspectors, and findings for this tab.');
     } catch (err) {
       checkerError(err);
     } finally {
@@ -501,6 +838,25 @@ function wireCheckers() {
 // -------------------------------------------------------------- report wiring
 
 function wireReport() {
+  // One delegated listener — finding rows are re-rendered on every run.
+  $('findings-groups').addEventListener('click', (e) => {
+    const reveal = e.target.closest('.finding-reveal');
+    if (reveal) {
+      revealFinding({ selector: reveal.dataset.selector, severity: reveal.dataset.severity });
+      return;
+    }
+    const hl = e.target.closest('.highlight-all');
+    if (hl) {
+      highlightAllForTool(hl.dataset.tool);
+      return;
+    }
+    const more = e.target.closest('.show-all');
+    if (more) {
+      expandedTools.add(more.dataset.tool);
+      if (lastStore) renderReport(lastStore);
+    }
+  });
+
   $('export-csv').addEventListener('click', async () => {
     const store = await getStore();
     const { current, resolved } = allFindings(store);
@@ -535,20 +891,61 @@ function wireReport() {
 
 // ----------------------------------------------------------------------- init
 
-async function init() {
-  [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  restricted = isRestricted(tab && tab.url);
-
-  if (restricted) {
-    $('restricted-msg').hidden = false;
-    for (const el of document.querySelectorAll('input, button')) el.disabled = true;
-    return;
+// Reversible restricted-page UI (the panel moves between tabs, so a one-way
+// disable is not enough).
+function setRestrictedUI(on) {
+  $('restricted-msg').hidden = !on;
+  for (const el of document.querySelectorAll('input, button')) el.disabled = on;
+  if (!on) {
+    // Re-apply state-dependent disables the blanket enable just cleared;
+    // renderState corrects these again as soon as fresh state arrives.
+    const reflowOn = !!(lastState && lastState.reflow);
+    $('run-reflow-scan').disabled = !reflowOn;
+    const reflowBatchBox = document.querySelector('.batch-select[data-batch-id="reflow"]');
+    if (reflowBatchBox) reflowBatchBox.disabled = !reflowOn;
   }
+}
+
+// Re-resolves the active tab and re-renders everything that is per-tab. The
+// popup runs this once; the side panel re-runs it on tab switch/navigation.
+let refreshToken = 0;
+
+async function refreshForActiveTab() {
+  const token = ++refreshToken; // last-wins guard against rapid tab switches
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (token !== refreshToken) return;
+  tab = active;
+  restricted = isRestricted(tab && tab.url);
+  setRestrictedUI(restricted);
+  if (restricted) return;
+
+  banner('');
+  for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
+  $('batch-progress').textContent = '';
+  const res = await send({ type: 'getState' });
+  if (token !== refreshToken) return;
+  if (res && res.ok) renderState(res.state, res.caps);
+  renderReport(await getStore());
+  refreshTextSpacingButton();
+  refreshAccnameButton();
+  refreshLiveRegionsButton();
+}
+
+async function init() {
+  if (IS_PANEL) document.documentElement.classList.add('panel');
 
   try {
     wireEmulation();
     wireCheckers();
     wireReport();
+    $('open-side-panel').hidden = IS_PANEL;
+    if (!IS_PANEL) {
+      $('open-side-panel').addEventListener('click', () => {
+        // Must run synchronously in the click handler (user-gesture rule).
+        chrome.sidePanel.open({ tabId: tab.id });
+        window.close();
+      });
+    }
   } catch (e) {
     // A wiring failure (e.g. stale cached popup.js against a newer
     // popup.html) would otherwise leave every button dead with no clue.
@@ -556,19 +953,32 @@ async function init() {
     throw e;
   }
 
-  const res = await send({ type: 'getState' });
-  if (res && res.ok) renderState(res.state, res.caps);
-
-  renderReport(await getStore());
-  refreshTextSpacingButton();
-  refreshAccnameButton();
+  await refreshForActiveTab();
+  initBatchSelection(); // once — the selection is a user preference, not per-tab
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg && msg.type === 'stateChanged' && msg.tabId === tab.id) {
+    if (msg && msg.type === 'stateChanged' && tab && msg.tabId === tab.id) {
       renderState(msg.state, null);
       if (msg.reason) banner(msg.reason);
     }
   });
+
+  if (IS_PANEL) {
+    chrome.tabs.onActivated.addListener(() => refreshForActiveTab());
+    chrome.tabs.onUpdated.addListener((tabId, info) => {
+      // Fires for every tab — only react to the one this panel tracks.
+      if (tab && tabId === tab.id && (info.status === 'complete' || info.url)) {
+        refreshForActiveTab();
+      }
+    });
+    // Checkers run from the popup while the panel is open should update the
+    // panel's report too. Shared storage is last-write-wins by design.
+    chrome.storage.session.onChanged.addListener((changes) => {
+      if (tab && changes[`findings:${tab.id}`] && !restricted) {
+        getStore().then(renderReport);
+      }
+    });
+  }
 }
 
 init();
