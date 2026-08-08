@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Regions (aria-live) Monitor Fixtures</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+
+    .test-section {
+      margin: 2rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+
+    .test-section h3 {
+      margin-top: 0;
+      font-size: 1rem;
+    }
+
+    .test-note {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+
+    .region {
+      min-height: 1.5em;
+      margin: 0.5rem 0;
+      padding: 0.5rem;
+      border: 2px dashed #999;
+      background: #fff;
+    }
+
+    button {
+      font: inherit;
+      padding: 0.35rem 0.8rem;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Live Regions (aria-live) Monitor Fixtures</h1>
+  <p>
+    Fixtures for the <strong>Live regions</strong> monitor (WCAG 4.1.3 Status Messages).
+    Start the monitor from the extension popup, then use the buttons below — each
+    announcement must appear (appended, never replacing earlier entries) in the on-page
+    log panel attached to its region. <code>data-expect="review"</code> regions must get
+    a panel and a start-time finding; <code>data-expect="pass"</code> must be ignored.
+  </p>
+
+  <div class="test-section">
+    <h3>⚠ Review (a): aria-live="polite"</h3>
+    <div id="lr-polite" class="region" aria-live="polite" data-expect="review"></div>
+    <button type="button" id="btn-polite">Announce polite</button>
+    <p class="test-note">⚠ Panel should show a green "polite" tag; each click appends a new entry.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (b): aria-live="assertive"</h3>
+    <div id="lr-assertive" class="region" aria-live="assertive" data-expect="review"></div>
+    <button type="button" id="btn-assertive">Announce assertive</button>
+    <p class="test-note">⚠ Panel should show a red "assertive" tag.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (c): role="alert" (implicit assertive)</h3>
+    <div id="lr-alert" class="region" role="alert" data-expect="review"></div>
+    <button type="button" id="btn-alert">Fire alert</button>
+    <p class="test-note">⚠ No aria-live attribute — implicit assertive via role.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (d): role="status" (implicit polite)</h3>
+    <div id="lr-status" class="region" role="status" data-expect="review"></div>
+    <button type="button" id="btn-status">Update status</button>
+    <button type="button" id="btn-remove-status">Remove region</button>
+    <p class="test-note">
+      ⚠ Removing the region must keep its panel (marked "removed") and its logged
+      entries must survive in the export.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (e): &lt;output&gt; (implicit status)</h3>
+    <output id="lr-output" class="region" data-expect="review"></output>
+    <button type="button" id="btn-output">Write to output</button>
+    <p class="test-note">⚠ The output element has an implicit status role — polite.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>⚠ Review (f): aria-atomic="true"</h3>
+    <div id="lr-atomic" class="region" aria-live="polite" aria-atomic="true" data-expect="review">
+      <span>Cart total:</span> <span id="lr-atomic-value">$0.00</span>
+    </div>
+    <button type="button" id="btn-atomic">Update total</button>
+    <p class="test-note">
+      ⚠ Only one span mutates, but aria-atomic means the whole region is announced —
+      the logged message must contain the full "Cart total: $…" text.
+    </p>
+  </div>
+
+  <div class="test-section">
+    <h3>✓ Pass (g): aria-live="off"</h3>
+    <div id="lr-off" class="region" aria-live="off" data-expect="pass"></div>
+    <button type="button" id="btn-off">Update silently</button>
+    <p class="test-note">✓ aria-live="off" must get no panel and no finding.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>Dynamic behaviors</h3>
+    <div id="dynamic-slot"></div>
+    <button type="button" id="btn-add-dynamic">Add dynamic region</button>
+    <button type="button" id="btn-rapid">Rapid duplicate ×3</button>
+    <button type="button" id="btn-interval">Start interval announcer</button>
+    <p class="test-note">
+      "Add dynamic region" creates a new polite region after the monitor started — it
+      must get a panel (no retroactive finding; badge counts start-time regions).
+      "Rapid duplicate ×3" writes the identical message three times within ~100&nbsp;ms —
+      dedupe must collapse it to one log entry. The interval announcer posts a counter
+      to the polite region every 3&nbsp;s for soak testing.
+    </p>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+
+  <script>
+    let n = 0;
+    const set = (id, text) => { document.getElementById(id).textContent = text; };
+
+    document.getElementById('btn-polite').addEventListener('click', () => {
+      set('lr-polite', `Polite update #${++n}: your changes were saved.`);
+    });
+    document.getElementById('btn-assertive').addEventListener('click', () => {
+      set('lr-assertive', `Assertive update #${++n}: session expires in 1 minute!`);
+    });
+    document.getElementById('btn-alert').addEventListener('click', () => {
+      set('lr-alert', `Alert #${++n}: form submission failed.`);
+    });
+    document.getElementById('btn-status').addEventListener('click', () => {
+      set('lr-status', `Status #${++n}: 3 results found.`);
+    });
+    document.getElementById('btn-remove-status').addEventListener('click', () => {
+      const el = document.getElementById('lr-status');
+      if (el) el.remove();
+    });
+    document.getElementById('btn-output').addEventListener('click', () => {
+      set('lr-output', `Calculation result #${++n}: 42`);
+    });
+    document.getElementById('btn-atomic').addEventListener('click', () => {
+      set('lr-atomic-value', `$${(++n * 9.99).toFixed(2)}`);
+    });
+    document.getElementById('btn-off').addEventListener('click', () => {
+      set('lr-off', `Silent update #${++n} — must not be logged.`);
+    });
+
+    document.getElementById('btn-add-dynamic').addEventListener('click', () => {
+      const div = document.createElement('div');
+      div.className = 'region';
+      div.id = `lr-dynamic-${++n}`;
+      div.setAttribute('aria-live', 'polite');
+      div.setAttribute('data-expect', 'review');
+      document.getElementById('dynamic-slot').appendChild(div);
+      setTimeout(() => { div.textContent = `Dynamic region ${div.id} says hello.`; }, 300);
+    });
+
+    document.getElementById('btn-rapid').addEventListener('click', () => {
+      const msg = `Duplicate burst #${++n}`;
+      set('lr-polite', '');
+      setTimeout(() => set('lr-polite', msg), 10);
+      setTimeout(() => { set('lr-polite', ''); set('lr-polite', msg); }, 50);
+      setTimeout(() => { set('lr-polite', ''); set('lr-polite', msg); }, 90);
+    });
+
+    let interval = null;
+    document.getElementById('btn-interval').addEventListener('click', (e) => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+        e.target.textContent = 'Start interval announcer';
+        return;
+      }
+      interval = setInterval(() => {
+        set('lr-polite', `Interval tick #${++n}`);
+      }, 3000);
+      e.target.textContent = 'Stop interval announcer';
+    });
+  </script>
+</body>
+</html>

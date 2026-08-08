@@ -21,6 +21,27 @@ body {
   font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Same markup hosted in the Chrome side panel (?context=panel). */
+html.panel body {
+  width: auto;
+  min-width: 300px;
+  max-width: 560px;
+  margin-inline: auto;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.header-row button {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
 h1 {
   font-size: 15px;
   margin: 0 0 8px;
@@ -79,6 +100,37 @@ small {
   display: block;
 }
 
+.batch-row {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+#batch-progress {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.batch-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.batch-pair input {
+  vertical-align: middle;
+  margin: 0 2px 0 0;
+}
+
+.inline-toggle {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 button {
   font: inherit;
   padding: 5px 10px;
@@ -134,16 +186,109 @@ button:disabled {
   margin-bottom: 6px;
 }
 
-#findings-list {
+.tool-group {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  margin: 6px 0;
+  padding: 4px 8px;
+}
+
+.tool-group summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.group-actions {
+  margin: 6px 0 2px;
+}
+
+.group-actions button,
+.show-all {
+  min-height: 22px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.tool-findings {
+  list-style: none;
   margin: 6px 0 0;
-  padding-left: 16px;
+  padding: 0;
+}
+
+li.finding {
+  margin-bottom: 6px;
+}
+
+.finding-reveal,
+.finding-static {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  min-height: 0;
+}
+
+.finding-reveal {
+  cursor: pointer;
+}
+
+.finding-reveal:hover {
+  border-color: var(--accent);
+}
+
+.finding-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sev {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #fff;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--review);
+}
+
+.sev-fail { background: var(--fail); }
+.sev-warn { background: var(--warn); }
+.sev-review { background: var(--review); }
+
+.wcag {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+code.sel {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 11px;
   overflow-wrap: anywhere;
 }
 
-#findings-list li {
-  margin-bottom: 5px;
+.chip-new {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0 5px;
+}
+
+.finding-details {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .buttons {

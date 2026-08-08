@@ -8,7 +8,13 @@
 </head>
 <body>
   <header>
-    <h1>Accessibility Modes</h1>
+    <div class="header-row">
+      <h1>Accessibility Modes</h1>
+      <button type="button" id="open-side-panel" class="secondary"
+        title="Open this UI in the browser side panel — it stays open while you interact with the page">
+        Open in side panel
+      </button>
+    </div>
     <div id="banner" class="banner" role="alert" hidden></div>
     <div id="restricted-msg" class="banner" hidden>
       Emulation and checkers aren't available on this page (browser or store pages).
@@ -66,33 +72,57 @@
 
   <fieldset id="checkers">
     <legend>Checkers</legend>
+    <div class="checker-row batch-row">
+      <button type="button" id="run-selected">Run selected</button>
+      <span id="batch-progress"></span>
+    </div>
     <div class="checker-row">
-      <span class="name">Motion respect <small>2.3.3 / 2.2.2 — best with Reduced motion ON</small></span>
+      <input type="checkbox" class="batch-select" data-batch-id="motion"
+        title="Include in Run selected" aria-label="Include Motion respect in Run selected">
+      <span class="name">Motion respect <small>2.3.3 / 2.2.2 — best with Reduced motion ON</small>
+        <label class="inline-toggle" title="Emulate prefers-reduced-motion: reduce (same as the Emulation toggle above)">
+          <input type="checkbox" id="toggle-reduced-motion-inline"> Reduced motion
+        </label>
+      </span>
       <button type="button" id="run-motion">Run</button>
       <span class="badge" id="badge-motion" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="text-spacing-analyze"
+        title="Include the Analyze clipping pass in Run selected" aria-label="Include Text spacing analysis in Run selected">
       <span class="name">Text spacing <small>1.4.12</small></span>
       <button type="button" id="toggle-text-spacing">Apply overrides</button>
       <button type="button" id="run-text-spacing">Analyze clipping</button>
       <span class="badge" id="badge-text-spacing" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="focus-visibility"
+        title="Include in Run selected" aria-label="Include Focus visibility in Run selected">
       <span class="name">Focus visibility <small>2.4.7</small></span>
       <button type="button" id="run-focus">Run</button>
       <span class="badge" id="badge-focus" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="target-size"
+        title="Include in Run selected" aria-label="Include Target size in Run selected">
       <span class="name">Target size <small>2.5.8</small></span>
       <button type="button" id="run-target-size">Run</button>
       <span class="badge" id="badge-target-size" hidden></span>
     </div>
     <div class="checker-row">
+      <span class="batch-pair">
+        <label title="Include the static hover pass in Run selected">
+          <input type="checkbox" class="batch-select" data-batch-id="hover-static"> static</label>
+        <label title="Include the full pointer probe in Run selected (slow — moves the real mouse)">
+          <input type="checkbox" class="batch-select" data-batch-id="hover-probe"> probe</label>
+      </span>
       <span class="name">Hover/focus content <small>1.4.13</small></span>
       <button type="button" id="run-hover">Run</button>
       <span class="badge" id="badge-hover" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="reflow" disabled
+        title="Include in Run selected (needs the Reflow test toggle on)" aria-label="Include Reflow scan in Run selected">
       <span class="name">Reflow scan <small>1.4.10</small></span>
       <button type="button" id="run-reflow-scan" disabled title="Enable the Reflow test toggle first">Scan overflow</button>
       <span class="badge" id="badge-reflow" hidden></span>
@@ -101,6 +131,12 @@
       <span class="name">Accessible names <small>4.1.2 — hover to inspect</small></span>
       <button type="button" id="toggle-accname">Start inspector</button>
       <span class="badge" id="badge-accname" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Live regions <small>4.1.3 — logs aria-live announcements on-page</small></span>
+      <button type="button" id="toggle-live-regions">Start monitor</button>
+      <button type="button" id="export-live-log" class="secondary">Export log</button>
+      <span class="badge" id="badge-live-regions" hidden></span>
     </div>
     <div class="checker-row">
       <button type="button" id="clear-overlays" class="secondary">Clear overlays</button>
@@ -114,10 +150,7 @@
   <fieldset id="report">
     <legend>Report</legend>
     <div id="report-summary">No findings yet.</div>
-    <details>
-      <summary>Findings preview</summary>
-      <ul id="findings-list"></ul>
-    </details>
+    <div id="findings-groups"></div>
     <div class="row buttons">
       <button type="button" id="export-csv">Export CSV</button>
       <button type="button" id="clear-findings" class="secondary">Clear findings</button>

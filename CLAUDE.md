@@ -19,9 +19,30 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - `popup/popup.js` — the integration hub: emulation controls (via `chrome.runtime`
   messages to the SW), checker injection (`chrome.scripting` under **activeTab** — no
   host_permissions in the real manifest, keep it that way), findings store, diff, CSV.
+  Run-button checkers are declared in the `CHECKERS` registry (drives both the
+  per-row buttons and the sequential "Run selected" batch; `data-batch-id` in
+  popup.html must match `CHECKERS[].id` — hand-synced, init warns on mismatch).
+  Batch order = registry order, deliberately: text-spacing analyze applies its
+  override stylesheet as a side effect, so it runs after target-size/reflow and a
+  `batchCleanup` removes the overrides (batch only — the individual button leaves
+  them applied); the slow hover probe runs last. The same popup.html also serves as
+  the **Chrome side panel** — the SW registers `popup/popup.html?context=panel` via
+  `sidePanel.setOptions` at top level, and `IS_PANEL` in popup.js switches on
+  tab-tracking listeners (`tabs.onActivated`/`onUpdated` → `refreshForActiveTab()`)
+  and panel-specific error wording. The `tabs` permission exists solely so the panel
+  can read `tab.url` across tab switches; activeTab still gates checker injection
+  per-tab (after navigating, the toolbar icon must be clicked to re-grant).
 - `checkers/*.js` — injected as CLASSIC scripts (not modules) into the page's isolated
   world. Injection order: `checkers/lib/selector.js`, `checkers/lib/findings.js`,
   (optional `overlay.js` / `accname.js`), then the checker file.
+  `checkers/lib/resolve.js` (`__a11yResolve`) is the exact inverse of selector.js's
+  `" >>> "` shadow-path format — used by the popup's click-a-finding reveal /
+  highlight-all; keep the two formats consistent. `checkers/live-regions.js` is a
+  stateful monitor (accname-inspector pattern: `start|stop|status|export`); its
+  popup-open re-sync probe is the `document.documentElement.dataset.a11yLiveMonitor`
+  DOM marker, its log entries live page-side in the checker closure and are
+  **intentionally outside** the findings schema/diff (events, not defects — only the
+  one-review-finding-per-region summary goes through `storeToolFindings`).
 - `test-pages/*.html` — deliberate-defect fixtures. Every defect element carries a
   `data-expect="fail|warn|review|pass"` attribute; the E2E verify script asserts
   against these. Self-contained inline CSS/JS is intentional — ignore inline-style
@@ -52,6 +73,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `tools/keyboard-trap-scan/lib/focusables.js`, and `popup/csv.js` vs
   `tools/keyboard-trap-scan/lib/csv.js`. The scanner must stay standalone (no shared
   imports possible without a build step). When touching one sibling, update the other.
+  The sync contract for csv.js is the findings COLUMN SET; `buildCsv`/`downloadTable`
+  (column-parameterized, used by the live-region log export) are popup-only and
+  deliberately absent from the scanner sibling.
 
 ## Hard-won gotchas
 
@@ -108,6 +132,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Findings `details` strings: full sentences, name the WCAG criterion's requirement,
   and say what to verify when severity is `review`/`warn`.
 - New checkers: add the file under `checkers/`, register on `__a11yCheckers`, wire a
-  row + badge in `popup/popup.html`/`popup.js` (`BADGE_BY_TOOL`), add a fixture page
+  row + badge in `popup/popup.html`/`popup.js` (`BADGE_BY_TOOL`), add a `CHECKERS`
+  registry entry + `data-batch-id` checkbox if it's batchable, add a fixture page
   with `data-expect` attributes, and extend the verify script.
 - The user manages git entirely — never commit, push, or stage.
