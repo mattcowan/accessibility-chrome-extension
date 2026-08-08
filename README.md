@@ -80,8 +80,12 @@ Emulation toggles are unaffected; they work through the debugger permission.
 
 The extension asks for the `tabs` permission ("read your browsing history" in the
 install warning) solely so the side panel can see the active tab's URL when following
-tab switches; the `debugger` permission it already holds exposes tab URLs anyway, so
-this adds no real access.
+tab switches — without it, `chrome.tabs.query` omits `url` for tabs that haven't
+received an activeTab grant. In practice this mostly formalizes visibility the
+extension already had: the `debugger` permission it holds allows enumerating every
+tab's URL and title via `chrome.debugger.getTargets()` without attaching. Still,
+`tabs` makes that URL access ordinary and continuous rather than incidental, so it's
+worth naming.
 
 ## The debugger infobar
 

@@ -917,15 +917,21 @@ async function refreshForActiveTab() {
   tab = active;
   restricted = isRestricted(tab && tab.url);
   setRestrictedUI(restricted);
-  if (restricted) return;
 
+  // Clear per-tab UI before any early return — a switch to a restricted tab
+  // must not leave the previous tab's findings on screen.
   banner('');
   for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
   $('batch-progress').textContent = '';
+  renderReport({ url: tab && tab.url, tools: {} });
+  if (restricted) return;
+
   const res = await send({ type: 'getState' });
   if (token !== refreshToken) return;
   if (res && res.ok) renderState(res.state, res.caps);
-  renderReport(await getStore());
+  const store = await getStore();
+  if (token !== refreshToken) return;
+  renderReport(store);
   refreshTextSpacingButton();
   refreshAccnameButton();
   refreshLiveRegionsButton();
