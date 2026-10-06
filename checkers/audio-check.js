@@ -5,15 +5,18 @@
 //
 // Reports audio that starts without user action and can play for more than
 // 3 seconds, and whether a control to pause, stop, or change its volume is
-// within the first three elements. Two cases:
+// within the first three elements. Three cases:
 //   - plays now: an unmuted media element that is playing;
+//   - played: an element that started on its own and has stopped or ended
+//     (graded on how long it actually played, from el.played);
 //   - would play: an unmuted autoplay element the browser's autoplay policy
 //     kept paused. Whether it plays depends on the browser profile (user
 //     interaction, Media Engagement Index), so these are always `review`.
 // After "Reload and record", the page-world hook (background/audio-hook.js)
 // also reports script calls to play() and Web Audio starts, including calls
-// the browser blocked. Returns { findings, playing } — `playing` lets the
-// popup tell whether Chrome's tab-level "audible" flag is already explained.
+// the browser blocked. Returns { findings, playing, hooked } — `playing` lets
+// the popup tell whether Chrome's tab-level "audible" flag is already
+// explained; `hooked` says whether the recorder answered in this frame.
 globalThis.__a11yCheckers = globalThis.__a11yCheckers || {};
 
 globalThis.__a11yCheckers.audio = function audio() {
@@ -28,12 +31,19 @@ globalThis.__a11yCheckers.audio = function audio() {
   // main world; this checker runs in the isolated world, so they talk through
   // DOM events. Each record is dispatched on its media element (the event
   // target crosses worlds; only the string detail is read). Synchronous: the
-  // hook answers inside dispatchEvent. No hook → no records.
+  // hook answers inside dispatchEvent. The hook always answers first with a
+  // { kind: 'hook' } sentinel, so "no hook" (hooked: false) is distinct from
+  // "hook ran and recorded nothing".
   function readRecords() {
     const out = [];
+    let hooked = false;
     const onRecord = (e) => {
       try {
         const rec = JSON.parse(e.detail);
+        if (rec.kind === 'hook') {
+          hooked = true;
+          return;
+        }
         const target = e.composedPath()[0];
         rec.el = target && target.nodeType === Node.ELEMENT_NODE ? target : null;
         out.push(rec);
@@ -47,10 +57,10 @@ globalThis.__a11yCheckers.audio = function audio() {
     } finally {
       document.removeEventListener('__a11y-audio-rec', onRecord, true);
     }
-    return out;
+    return { hooked, records: out };
   }
 
-  const records = readRecords();
+  const { hooked, records } = readRecords();
   const recordFor = new Map(); // element -> latest media record
   for (const rec of records) {
     if (rec.kind === 'media' && rec.el) recordFor.set(rec.el, rec);
@@ -88,6 +98,30 @@ globalThis.__a11yCheckers.audio = function audio() {
     return `A candidate control was found, but not within the first three elements. ${describe(m)}`;
   }
 
+  // Severity for audio known to have started without user action.
+  function autoFinding(el, m, lead) {
+    let severity;
+    let details;
+    if (m && m.where === 'first3') {
+      severity = 'review';
+      details = `${lead} ${mechanismSentence(m)} Activate it and confirm it pauses, stops, or changes the volume of only this audio (${RULE}).`;
+    } else if (m) {
+      severity = 'warn';
+      details = `${lead} ${mechanismSentence(m)} ${RULE} requires the control within the first three elements a user encounters.`;
+    } else {
+      severity = 'fail';
+      details = `${lead} ${mechanismSentence(m)} ${RULE} requires a way to pause, stop, or control its volume within the first three elements.`;
+    }
+    findings.push(makeFinding({ tool: 'audio', wcag: '1.4.2', severity, el, details }));
+  }
+
+  // Total seconds the element has actually played (all played ranges).
+  function playedSeconds(el) {
+    let total = 0;
+    for (let i = 0; i < el.played.length; i++) total += el.played.end(i) - el.played.start(i);
+    return total;
+  }
+
   function wouldPlay(el, how) {
     const m = find(el, '2.A');
     findings.push(
@@ -120,24 +154,47 @@ globalThis.__a11yCheckers.audio = function audio() {
       // gives the page sticky activation. Only the autoplay attribute or a
       // Reload-and-record entry (made with no gesture) proves autoplay.
       const certain = el.autoplay || startedByUser === false;
-      let severity;
-      let details;
-      if (!certain) {
-        severity = 'review';
-        details =
-          'Audio is playing without the autoplay attribute, so a script or the user started it. ' +
-          `Use Reload and record to find out whether it starts on its own. If it does, ${RULE} needs a control within the first three elements. ${mechanismSentence(m)}`;
-      } else if (m && m.where === 'first3') {
-        severity = 'review';
-        details = `Audio plays automatically. ${mechanismSentence(m)} Activate it and confirm it pauses, stops, or changes the volume of only this audio (${RULE}).`;
-      } else if (m) {
-        severity = 'warn';
-        details = `Audio plays automatically. ${mechanismSentence(m)} ${RULE} requires the control within the first three elements a user encounters.`;
+      if (certain) {
+        autoFinding(el, m, 'Audio plays automatically for more than 3 seconds.');
       } else {
-        severity = 'fail';
-        details = `Audio plays automatically for more than 3 seconds. ${mechanismSentence(m)} ${RULE} requires a way to pause, stop, or control its volume within the first three elements.`;
+        findings.push(
+          makeFinding({
+            tool: 'audio',
+            wcag: '1.4.2',
+            severity: 'review',
+            el,
+            details:
+              'Audio is playing without the autoplay attribute, so a script or the user started it. ' +
+              `Use Reload and record to find out whether it starts on its own. If it does, ${RULE} needs a control within the first three elements. ${mechanismSentence(m)}`,
+          })
+        );
       }
-      findings.push(makeFinding({ tool: 'audio', wcag: '1.4.2', severity, el, details }));
+      continue;
+    }
+
+    // Stopped or ended after playing. Audio that started on its own and ran
+    // more than 3 seconds broke 1.4.2 even if it is quiet by the time a
+    // checker runs (a 3.5 s clip has always ended by then).
+    const startedAuto = rec ? rec.outcome === 'played' && rec.user === false : el.autoplay;
+    if (startedAuto && (el.ended || el.currentTime > 0)) {
+      const secs = playedSeconds(el);
+      const shown = secs.toFixed(1);
+      const m = find(el, '2.A');
+      if (secs > 3) {
+        autoFinding(el, m, `Audio played automatically for ${shown} seconds and has ${el.ended ? 'ended' : 'stopped'}.`);
+      } else {
+        findings.push(
+          makeFinding({
+            tool: 'audio',
+            wcag: '1.4.2',
+            severity: 'review',
+            el,
+            details:
+              `Audio started automatically and stopped after ${shown} seconds, before the 3-second threshold. Check what stopped it. ` +
+              `If it can play for more than 3 seconds, ${RULE} needs a control within the first three elements. ${mechanismSentence(m)}`,
+          })
+        );
+      }
       continue;
     }
 
@@ -198,5 +255,5 @@ globalThis.__a11yCheckers.audio = function audio() {
     );
   }
 
-  return { findings, playing };
+  return { findings, playing, hooked };
 };

@@ -12,6 +12,11 @@ const MECHANISM = ['checkers/lib/accname.js', 'checkers/lib/mechanism.js'];
 // After Reload and record, wait this long for page scripts to start audio
 // (and for Chrome's tab "audible" flag, which lags a moment) before checking.
 const RECORD_SETTLE_MS = 4000;
+// The Record click gives this page transient user activation (5 s in Chrome),
+// and any executeScript made while it lasts carries the gesture into the
+// page. Inject nothing into the reloaded page until it has expired.
+const ACTIVATION_EXPIRY_MS = 6000;
+let recordingAudio = false; // Reload and record in progress (side panel guards)
 const LIVE_FILES = [...LIBS, 'checkers/live-regions.js'];
 const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
 
@@ -597,10 +602,12 @@ async function execAudio(entry) {
   const results = await callChecker('audio', null, true);
   const findings = [];
   let playing = 0;
+  let hooked = false;
   for (const r of results) {
     if (!r.result || !Array.isArray(r.result.findings)) continue;
     findings.push(...r.result.findings);
     playing += r.result.playing || 0;
+    if (r.frameId === 0) hooked = !!r.result.hooked;
   }
   const live = await chrome.tabs.get(tab.id);
   if (live.audible && !playing) {
@@ -614,7 +621,7 @@ async function execAudio(entry) {
     else findings.push({ tool: 'audio', wcag: '1.4.2', severity: 'review', selector: '(page)', snippet: '', details: note });
   }
   const stored = await storeToolFindings('audio', findings);
-  return { tool: 'audio', count: stored.findings.length };
+  return { tool: 'audio', count: stored.findings.length, hooked };
 }
 
 function execEntry(entry) {
@@ -750,8 +757,14 @@ function wireCheckers() {
 
   // Reload and record: the SW installs a page-world hook, reloads the tab and
   // waits for the load; then the audio checker runs with the hook's records.
+  // While it runs, recordingAudio keeps the button disabled through the side
+  // panel's restricted-UI reset and stops the panel's reload refresh from
+  // injecting into the page (that injection would carry the click's gesture
+  // and make page audio look user-started).
   $('record-audio').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    const clickedAt = Date.now();
+    recordingAudio = true;
     btn.disabled = true;
     banner('');
     try {
@@ -761,13 +774,21 @@ function wireCheckers() {
         banner(res && res.error ? res.error : 'Could not reload the page with recording hooks.');
         return;
       }
-      await sleep(RECORD_SETTLE_MS);
-      const { count } = await execAudio(CHECKERS.find((c) => c.id === 'audio'));
+      await sleep(Math.max(RECORD_SETTLE_MS, ACTIVATION_EXPIRY_MS - (Date.now() - clickedAt)));
+      const { count, hooked } = await execAudio(CHECKERS.find((c) => c.id === 'audio'));
       announce(`audio: ${count} findings after a recorded reload`);
-      if (!res.loaded) banner('The page did not finish loading within 30 seconds. The recorded results may be incomplete.');
+      const problems = [];
+      if (!hooked) problems.push('The recorder did not run on this page, so these are static results only (script-started audio is not covered). Try Reload and record again.');
+      if (!res.loaded) problems.push('The page did not finish loading within 30 seconds. The recorded results may be incomplete.');
+      if (problems.length) banner(problems.join(' '));
+      // The reload reset page-side tool state; re-sync the toggle labels.
+      refreshTextSpacingButton();
+      refreshAccnameButton();
+      refreshLiveRegionsButton();
     } catch (err) {
       checkerError(err);
     } finally {
+      recordingAudio = false;
       btn.disabled = false;
     }
   });
@@ -968,6 +989,7 @@ function setRestrictedUI(on) {
     $('run-reflow-scan').disabled = !reflowOn;
     const reflowBatchBox = document.querySelector('.batch-select[data-batch-id="reflow"]');
     if (reflowBatchBox) reflowBatchBox.disabled = !reflowOn;
+    $('record-audio').disabled = recordingAudio;
   }
 }
 
@@ -1038,6 +1060,9 @@ async function init() {
     chrome.tabs.onActivated.addListener(() => refreshForActiveTab());
     chrome.tabs.onUpdated.addListener((tabId, info) => {
       // Fires for every tab — only react to the one this panel tracks.
+      // Skipped during Reload and record: the refresh would inject into the
+      // reloaded page while the Record click's activation is still live.
+      if (recordingAudio) return;
       if (tab && tabId === tab.id && (info.status === 'complete' || info.url)) {
         refreshForActiveTab();
       }

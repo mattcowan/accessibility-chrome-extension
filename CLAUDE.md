@@ -58,7 +58,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   tab, waits for load, removes the script and `detachIfIdle`s — the whole cycle is in
   the SW so a closing popup can't leave the script installed. The hook (main world)
   answers the checker (isolated world) over DOM events: the checker dispatches
-  `__a11y-audio-query`; the hook dispatches one `__a11y-audio-rec` per record ON the
+  `__a11y-audio-query`; the hook first answers with a `{kind:'hook'}` sentinel (so the
+  checker's `hooked` result separates "no recorder" from "nothing recorded" — the
+  popup warns instead of showing a silent empty pass), then dispatches one `__a11y-audio-rec` per record ON the
   media element (the event target crosses worlds; the detail is a JSON string, since
   only primitives cross).
 - `test-pages/*.html` — deliberate-defect fixtures. Every defect element carries a
@@ -130,8 +132,13 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   gesture into the page** — after any checker Run, `navigator.userActivation
   .hasBeenActive` is true (verified: false via a SW-side injection on a fresh page,
   true after one popup Run click). So `hasBeenActive` is useless for "did autoplay
-  happen without the user", and running checkers can unblock a page's audio. Only
-  SW-originated work (Reload and record) is gesture-free.
+  happen without the user", and running checkers can unblock a page's audio. The
+  leak lasts as long as the click's transient activation (5 s in Chrome) — ANY
+  popup/panel `executeScript` in that window carries it, including automatic ones
+  like the side panel's `refreshForActiveTab` on reload (reproduced in E2E). Reload
+  and record therefore waits out `ACTIVATION_EXPIRY_MS` from the click before it
+  injects, and `recordingAudio` suppresses the panel's reload refresh. The reload
+  itself comes from the SW, which has no gesture.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,
   `prefers-reduced-transparency`) are capability-probed on first attach and their UI
   hidden if rejected — keep the probe when adding features.

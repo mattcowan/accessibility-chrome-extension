@@ -118,7 +118,9 @@ it. Consequences:
 - Running any checker from the popup gives the page user activation (Chrome passes
   the click's user gesture into injected scripts). After that, the page's scripts can
   start sound that was blocked before. To see a page's first-load audio behavior, run
-  **Reload and record**; its reload comes from the service worker, with no gesture.
+  **Reload and record**. Its reload comes from the service worker, with no gesture, and
+  it waits until the click's activation expires (about 6 seconds after the click)
+  before it checks the page.
 - "First three elements" (Trusted Tester) is counted in reading order: each control,
   media element, image with alt text, and run of text. Findings also give the
   control's tab-stop position.

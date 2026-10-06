@@ -62,6 +62,22 @@
   </div>
 
   <div class="case">
+    <strong>Delayed script audio:</strong> no autoplay attribute; a script
+    calls play() 1.5 seconds after load. Recorded results must not treat it
+    as user-started (the side panel's reload refresh must not leak a user
+    gesture into the page).
+    <audio id="delayed" loop data-tone="6"
+      data-expect="review" data-expect-blocked="pass" data-expect-recorded="review"></audio>
+  </div>
+
+  <div class="case defect">
+    <strong>3.5-second autoplay (defect):</strong> over the 3-second threshold,
+    no loop, no controls. It has usually ended by the time a checker runs.
+    <audio id="over" autoplay data-tone="3.5"
+      data-expect="fail" data-expect-blocked="review" data-expect-recorded="review"></audio>
+  </div>
+
+  <div class="case">
     <strong>Muted autoplay (pass):</strong> no sound, so 1.4.2 does not apply.
     <audio id="muted" autoplay loop muted data-tone="6"
       data-expect="pass" data-expect-blocked="pass"></audio>
@@ -101,6 +117,7 @@
       el.src = toneUrl(Number(el.dataset.tone));
     }
     document.getElementById('scripted').play().catch(() => {});
+    setTimeout(() => document.getElementById('delayed').play().catch(() => {}), 1500);
   </script>
 </body>
 </html>

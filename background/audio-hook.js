@@ -13,7 +13,9 @@
 //
 // The checker (checkers/audio-check.js) runs in the isolated world and cannot
 // read main-world variables. It dispatches '__a11y-audio-query' on document;
-// the hook answers synchronously with one '__a11y-audio-rec' event per record,
+// the hook answers synchronously with a { kind: 'hook' } sentinel (so the
+// checker can tell "hook missing" from "nothing recorded"), then one
+// '__a11y-audio-rec' event per record,
 // dispatched on the media element when it is in the page (so the checker gets
 // the element as the event target) and on document otherwise.
 //
@@ -70,14 +72,20 @@ function audioHook() {
     return p;
   };
 
-  // Attribute autoplay never calls play(); catch it when it starts.
+  // Playback that play() did not start: attribute autoplay, or the native
+  // controls (which do not call the JS play()). Skip only when the element's
+  // latest record is the play() call that caused this event (still pending,
+  // or played); after a blocked play(), a later start gets its own record,
+  // so a user starting it from the native controls is recorded as user: true.
   document.addEventListener(
     'playing',
     (e) => {
       const el = e.target;
       if (!(el instanceof HTMLMediaElement)) return;
-      for (const [, known] of elementOf) if (known === el) return;
-      const rec = mediaRecord(el, 'autoplay');
+      let latest = null;
+      for (const [rec, known] of elementOf) if (known === el) latest = rec;
+      if (latest && (latest.outcome === 'pending' || latest.outcome === 'played')) return;
+      const rec = mediaRecord(el, latest ? 'resumed' : 'autoplay');
       rec.outcome = 'played';
     },
     true
@@ -106,6 +114,10 @@ function audioHook() {
   }
 
   document.addEventListener('__a11y-audio-query', () => {
+    // Sentinel first: tells the checker the hook ran, even with no records.
+    document.dispatchEvent(
+      new CustomEvent('__a11y-audio-rec', { detail: JSON.stringify({ kind: 'hook' }), bubbles: true, composed: true })
+    );
     for (const rec of records) {
       const el = elementOf.get(rec);
       const target = el && el.isConnected ? el : document;
