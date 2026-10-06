@@ -7,6 +7,11 @@ import { downloadCsv, downloadTable } from './csv.js';
 
 const LIBS = ['checkers/lib/selector.js', 'checkers/lib/findings.js'];
 const OVERLAY = 'checkers/lib/overlay.js';
+// Mechanism finder for auto-playing content (TT 2.A / 2.B); needs accname.
+const MECHANISM = ['checkers/lib/accname.js', 'checkers/lib/mechanism.js'];
+// After Reload and record, wait this long for page scripts to start audio
+// (and for Chrome's tab "audible" flag, which lags a moment) before checking.
+const RECORD_SETTLE_MS = 4000;
 const LIVE_FILES = [...LIBS, 'checkers/live-regions.js'];
 const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
 
@@ -243,6 +248,7 @@ async function storeToolFindings(tool, rawFindings) {
 
 const BADGE_BY_TOOL = {
   motion: 'badge-motion',
+  audio: 'badge-audio',
   'text-spacing': 'badge-text-spacing',
   'focus-visibility': 'badge-focus',
   'target-size': 'badge-target-size',
@@ -477,10 +483,14 @@ async function highlightAllForTool(tool) {
 // stylesheet, which would skew their measurements) and the slow hover probe
 // runs last. The stateful toggles (text-spacing apply/remove, accname
 // inspector, live-regions monitor) are deliberately not batchable and stay
-// outside the registry.
+// outside the registry, as does audio's Reload and record (it reloads the
+// page, which would reset what the other checkers measure).
 const CHECKERS = [
   { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
-    files: ['checkers/motion-check.js'], fnName: 'motion', allFrames: true,
+    files: [...MECHANISM, 'checkers/motion-check.js'], fnName: 'motion', allFrames: true,
+    batchDefault: true },
+  { id: 'audio', tool: 'audio', buttonId: 'run-audio', kind: 'audio',
+    files: [...MECHANISM, 'checkers/audio-check.js'],
     batchDefault: true },
   { id: 'focus-visibility', tool: 'focus-visibility', buttonId: 'run-focus', kind: 'simple',
     files: [OVERLAY, 'checkers/focus-walker.js'], fnName: 'focusWalker',
@@ -578,8 +588,39 @@ async function execHover(entry) {
   }
 }
 
+// Audio (1.4.2): the checker returns { findings, playing } per frame. Chrome's
+// tab-level "audible" flag also catches sound the frames can't see (Web Audio,
+// cross-origin iframes); it is added as a page-level finding only when no
+// frame found an unmuted media element playing.
+async function execAudio(entry) {
+  await inject([...LIBS, ...entry.files], true);
+  const results = await callChecker('audio', null, true);
+  const findings = [];
+  let playing = 0;
+  for (const r of results) {
+    if (!r.result || !Array.isArray(r.result.findings)) continue;
+    findings.push(...r.result.findings);
+    playing += r.result.playing || 0;
+  }
+  const live = await chrome.tabs.get(tab.id);
+  if (live.audible && !playing) {
+    const note =
+      'Chrome reports that this tab is playing sound, but no unmuted media element in the page is playing. ' +
+      'The sound may come from Web Audio or from a cross-origin iframe. Find the source, check whether it started without user action and plays for more than 3 seconds, ' +
+      'and if so check for a control within the first three elements (WCAG 1.4.2 / Trusted Tester 2.A).';
+    // Keep one '(page)' finding per tool so the diff fingerprint stays unique.
+    const page = findings.find((f) => f.selector === '(page)');
+    if (page) page.details += ` ${note}`;
+    else findings.push({ tool: 'audio', wcag: '1.4.2', severity: 'review', selector: '(page)', snippet: '', details: note });
+  }
+  const stored = await storeToolFindings('audio', findings);
+  return { tool: 'audio', count: stored.findings.length };
+}
+
 function execEntry(entry) {
-  return entry.kind === 'hover' ? execHover(entry) : execChecker(entry);
+  if (entry.kind === 'hover') return execHover(entry);
+  if (entry.kind === 'audio') return execAudio(entry);
+  return execChecker(entry);
 }
 
 async function runFromButton(button, entry) {
@@ -706,6 +747,30 @@ function wireCheckers() {
   }
 
   $('run-selected').addEventListener('click', runBatch);
+
+  // Reload and record: the SW installs a page-world hook, reloads the tab and
+  // waits for the load; then the audio checker runs with the hook's records.
+  $('record-audio').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    banner('');
+    try {
+      announce('audio: reloading the page with recording hooks…');
+      const res = await send({ type: 'recordAudio' });
+      if (!res || !res.ok) {
+        banner(res && res.error ? res.error : 'Could not reload the page with recording hooks.');
+        return;
+      }
+      await sleep(RECORD_SETTLE_MS);
+      const { count } = await execAudio(CHECKERS.find((c) => c.id === 'audio'));
+      announce(`audio: ${count} findings after a recorded reload`);
+      if (!res.loaded) banner('The page did not finish loading within 30 seconds. The recorded results may be incomplete.');
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   $('toggle-text-spacing').addEventListener('click', async (e) => {
     e.target.disabled = true;

@@ -88,6 +88,17 @@
       <span class="badge" id="badge-motion" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="audio"
+        title="Include in Run selected" aria-label="Include Audio autoplay in Run selected">
+      <span class="name">Audio autoplay <small>1.4.2 / TT 2.A</small></span>
+      <button type="button" id="run-audio">Run</button>
+      <button type="button" id="record-audio" class="secondary"
+        title="Reload the page with recording hooks to catch audio that scripts start, including attempts the browser blocked">
+        Reload and record
+      </button>
+      <span class="badge" id="badge-audio" hidden></span>
+    </div>
+    <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="text-spacing-analyze"
         title="Include the Analyze clipping pass in Run selected" aria-label="Include Text spacing analysis in Run selected">
       <span class="name">Text spacing <small>1.4.12</small></span>

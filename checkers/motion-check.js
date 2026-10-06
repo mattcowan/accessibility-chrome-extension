@@ -1,7 +1,8 @@
 // Motion-respect checker (WCAG 2.3.3 Animation from Interactions / 2.2.2
-// Pause, Stop, Hide). Injected (classic script) after selector.js and
-// findings.js via chrome.scripting.executeScript files[]. Registers itself
-// on globalThis.__a11yCheckers; does no scanning at injection time.
+// Pause, Stop, Hide). Injected (classic script) after selector.js,
+// findings.js, accname.js and mechanism.js via chrome.scripting.executeScript
+// files[]. Registers itself on globalThis.__a11yCheckers; does no scanning at
+// injection time.
 globalThis.__a11yCheckers = globalThis.__a11yCheckers || {};
 
 globalThis.__a11yCheckers.motion = function motion() {
@@ -66,33 +67,32 @@ globalThis.__a11yCheckers.motion = function motion() {
     findings.push(makeFinding({ tool: 'motion', wcag: '2.3.3', severity: rec.severity, el, details }));
   }
 
-  const media = [];
-  collectMatching(document, 'video, audio', media);
-  for (const el of media) {
+  // Video only: <audio> has no moving content, so it is not a 2.2.2 case —
+  // auto-playing sound is WCAG 1.4.2, reported by the audio checker.
+  const { find, describe } = globalThis.__a11yMechanism;
+  const videos = [];
+  collectMatching(document, 'video', videos);
+  for (const el of videos) {
     if (!(el.autoplay || !el.paused)) continue;
-    const noControls = !el.paused && !el.controls;
-    const loopingNoControls = el.autoplay && el.loop && !el.controls;
-    if (noControls || loopingNoControls) {
-      findings.push(
-        makeFinding({
-          tool: 'motion',
-          wcag: '2.2.2',
-          severity: 'fail',
-          el,
-          details: 'Media autoplays/loops with no visible controls; no mechanism to pause, stop, or hide it.',
-        })
-      );
-    } else if (el.autoplay) {
-      findings.push(
-        makeFinding({
-          tool: 'motion',
-          wcag: '2.2.2',
-          severity: 'warn',
-          el,
-          details: 'Autoplaying media — verify a pause/stop control exists and it stops within 5 seconds.',
-        })
-      );
+    const m = find(el, '2.B');
+    let severity;
+    let details;
+    if (m && m.where !== 'elsewhere') {
+      severity = 'review';
+      details =
+        `Auto-playing video has a candidate mechanism to pause, stop, or hide it. ${describe(m)} ` +
+        'Activate it and confirm the video stops. WCAG 2.2.2 / Trusted Tester 2.B apply when the motion lasts more than 5 seconds.';
+    } else if (m) {
+      severity = 'warn';
+      details =
+        `Auto-playing video has a candidate pause control, but not where Trusted Tester 2.B expects it: within the first three elements, or within three elements before or after the video. ${describe(m)} ` +
+        'Verify that the control stops the video and that a user can find it.';
+    } else {
+      severity = 'fail';
+      details =
+        'Auto-playing video has no mechanism to pause, stop, or hide it (WCAG 2.2.2). No native controls, no control named pause/stop/play/hide/freeze, and no control with aria-controls pointing at the video was found.';
     }
+    findings.push(makeFinding({ tool: 'motion', wcag: '2.2.2', severity, el, details }));
   }
 
   const marquees = [];

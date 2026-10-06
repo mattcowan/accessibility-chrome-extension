@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio With a Pause Control First</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .case { margin: 1.5rem 0; padding: 1rem; border: 2px solid #999; background: #f9f9f9; }
+  </style>
+</head>
+<body>
+  <!--
+    WCAG 1.4.2 / Trusted Tester 2.A fixture: the pause control is the first
+    element on the page, so it meets the "first three elements" rule.
+    data-expect = autoplay allowed; data-expect-blocked = autoplay blocked.
+  -->
+  <button type="button" id="pause-audio">Pause audio</button>
+  <h1>Audio With a Pause Control First</h1>
+  <p>The page plays a quiet tone automatically. The first control pauses it.</p>
+
+  <div class="case">
+    <strong>Background audio with a pause control at the top:</strong>
+    <audio id="bg" autoplay loop data-tone="6"
+      data-expect="review" data-expect-blocked="review"></audio>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+
+  <script>
+    function toneUrl(seconds, freq) {
+      const rate = 8000;
+      const n = Math.round(rate * seconds);
+      const buf = new ArrayBuffer(44 + n);
+      const v = new DataView(buf);
+      const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate, true);
+      v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+      for (let i = 0; i < n; i++) v.setUint8(44 + i, 128 + Math.round(12 * Math.sin(2 * Math.PI * (freq || 440) * i / rate)));
+      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    }
+    for (const el of document.querySelectorAll('[data-tone]')) {
+      el.src = toneUrl(Number(el.dataset.tone));
+    }
+    document.getElementById('pause-audio').addEventListener('click', () => {
+      for (const el of document.querySelectorAll('audio')) el.pause();
+    });
+  </script>
+</body>
+</html>

@@ -34,7 +34,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   per-tab (after navigating, the toolbar icon must be clicked to re-grant).
 - `checkers/*.js` — injected as CLASSIC scripts (not modules) into the page's isolated
   world. Injection order: `checkers/lib/selector.js`, `checkers/lib/findings.js`,
-  (optional `overlay.js` / `accname.js`), then the checker file.
+  (optional `overlay.js` / `accname.js` / `mechanism.js`), then the checker file.
   `checkers/lib/resolve.js` (`__a11yResolve`) is the exact inverse of selector.js's
   `" >>> "` shadow-path format — used by the popup's click-a-finding reveal /
   highlight-all; keep the two formats consistent. `checkers/live-regions.js` is a
@@ -43,6 +43,24 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   DOM marker, its log entries live page-side in the checker closure and are
   **intentionally outside** the findings schema/diff (events, not defects — only the
   one-review-finding-per-region summary goes through `storeToolFindings`).
+- `checkers/lib/mechanism.js` (`__a11yMechanism`, needs `accname.js`) — finds a
+  pause/stop/hide/volume control for auto-playing content and applies the Trusted
+  Tester location rule: 2.A = first three elements only; 2.B (and later 2.C) = first
+  three OR within three elements before/after. "Element" is counted in reading order
+  (controls, media, alt-text images, text runs); the tab-stop position is reported
+  alongside. Shared by `motion-check.js` (video, 2.2.2) and `audio-check.js` (1.4.2).
+  `<audio>` is deliberately NOT in the motion checker — sound is 1.4.2, not motion.
+- `checkers/audio-check.js` returns `{findings, playing}`, not an array — the popup's
+  `execAudio` (registry `kind: 'audio'`) merges frames and adds a `(page)` review when
+  `chrome.tabs.get(tab).audible` is true but no frame found unmuted media playing.
+  **Reload and record**: the SW (`recordAudio` message) installs
+  `background/audio-hook.js` via `Page.addScriptToEvaluateOnNewDocument`, reloads the
+  tab, waits for load, removes the script and `detachIfIdle`s — the whole cycle is in
+  the SW so a closing popup can't leave the script installed. The hook (main world)
+  answers the checker (isolated world) over DOM events: the checker dispatches
+  `__a11y-audio-query`; the hook dispatches one `__a11y-audio-rec` per record ON the
+  media element (the event target crosses worlds; the detail is a JSON string, since
+  only primitives cross).
 - `test-pages/*.html` — deliberate-defect fixtures. Every defect element carries a
   `data-expect="fail|warn|review|pass"` attribute; the E2E verify script asserts
   against these. Self-contained inline CSS/JS is intentional — ignore inline-style
@@ -67,7 +85,8 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - **Message protocol** (popup ↔ SW): `getState`, `setMediaFeature`,
   `setVisionDeficiency`, `setReflow {value: false|'320'|'320zoom'}` ('320zoom' adds
   `scale: 4` to the viewport override — same 320px layout, 400%-zoom rendering),
-  `hoverProbe {action: start|move|escape|end}`, `resetTab`; SW broadcasts
+  `hoverProbe {action: start|move|escape|end}`, `recordAudio` (→ `{ok, loaded}` after
+  the reload finishes), `resetTab`; SW broadcasts
   `stateChanged {tabId, state, reason}`.
 - **Intentional duplication:** `checkers/lib/selector.js`+`findings.js` vs
   `tools/keyboard-trap-scan/lib/focusables.js`, and `popup/csv.js` vs
@@ -105,6 +124,14 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `new Function(HELPERS_SOURCE)` after editing.
 - `chrome.debugger` conflicts with open DevTools on the same tab (friendly error is
   mapped in debugger-manager); it coexists fine with Playwright's CDP connection.
+- `Page.addScriptToEvaluateOnNewDocument` silently does nothing under
+  chrome.debugger unless `Page.enable` is sent first (verified 2026-10-05).
+- **Every popup-triggered `chrome.scripting.executeScript` carries the click's user
+  gesture into the page** — after any checker Run, `navigator.userActivation
+  .hasBeenActive` is true (verified: false via a SW-side injection on a fresh page,
+  true after one popup Run click). So `hasBeenActive` is useless for "did autoplay
+  happen without the user", and running checkers can unblock a page's audio. Only
+  SW-originated work (Reload and record) is gesture-free.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,
   `prefers-reduced-transparency`) are capability-probed on first attach and their UI
   hidden if rejected — keep the probe when adding features.
@@ -120,6 +147,12 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `chrome-extension://<id>/popup/popup.html` in a tab, and drive `chrome.runtime.sendMessage`
   / `chrome.scripting` from that page. Run it from `tools/keyboard-trap-scan/` so
   `playwright` resolves. Assert against `data-expect` in test-pages. Was 30/30 at build.
+  Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
+  `data-expect-blocked`, `data-expect-recorded`): launch twice, with
+  `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
+  (Playwright sets no autoplay flag by default). Under Playwright,
+  `chrome.debugger.getTargets()` always reports `attached: true` (Playwright's own
+  session) — check the `tab:${id}` session state instead.
 - Scanner: `cd tools/keyboard-trap-scan && node scan.js
   "file:///C:/wamp64/www/chrome-ext-accessibility-modes/test-pages/keyboard-trap.html"`
   → expect `fail`, exit 1; with `?escapable=1` → `warn`, exit 0;

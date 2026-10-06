@@ -2,6 +2,7 @@
 // debugger-manager.js; checkers are run by the popup via chrome.scripting.
 
 import * as dbg from './debugger-manager.js';
+import { AUDIO_HOOK_SOURCE } from './audio-hook.js';
 
 // The side panel reuses popup.html; the query flag tells popup.js it is
 // long-lived (track tab switches/navigations). Manifest default_path can't
@@ -71,6 +72,9 @@ async function handle(msg) {
     case 'hoverProbe':
       return handleHoverProbe(msg);
 
+    case 'recordAudio':
+      return handleRecordAudio(tabId);
+
     case 'resetTab': {
       const res = await dbg.updateTabState(tabId, (s) => Object.assign(s, dbg.defaultTabState()));
       broadcast(tabId, res.state);
@@ -105,6 +109,46 @@ async function handleHoverProbe(msg) {
     }
     default:
       return { ok: false, error: `Unknown hoverProbe action: ${action}` };
+  }
+}
+
+// The audio checker's "Reload and record": install the page-world recorder,
+// reload, wait for the load, then remove the script (so later navigations are
+// not hooked) and detach if no emulation is active. The hook already in the
+// page keeps recording. The whole cycle runs here, not in the popup, so a
+// popup that closes mid-way cannot leave the script installed.
+const RECORD_LOAD_TIMEOUT_MS = 30000;
+
+function waitForReload(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let sawLoading = false;
+    const done = (loaded) => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(loaded);
+    };
+    const onUpdated = (id, info) => {
+      if (id !== tabId) return;
+      if (info.status === 'loading') sawLoading = true;
+      else if (info.status === 'complete' && sawLoading) done(true);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+async function handleRecordAudio(tabId) {
+  const attach = await dbg.ensureAttached(tabId);
+  if (!attach.ok) return { ok: false, error: attach.error };
+  let scriptId = null;
+  try {
+    scriptId = await dbg.addScriptOnNewDocument(tabId, AUDIO_HOOK_SOURCE);
+    const reloaded = waitForReload(tabId, RECORD_LOAD_TIMEOUT_MS);
+    await chrome.tabs.reload(tabId);
+    return { ok: true, loaded: await reloaded };
+  } finally {
+    if (scriptId) await dbg.removeScriptOnNewDocument(tabId, scriptId).catch(() => {});
+    broadcast(tabId, await dbg.detachIfIdle(tabId));
   }
 }
 
