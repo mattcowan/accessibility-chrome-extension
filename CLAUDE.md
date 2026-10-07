@@ -147,14 +147,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
-- **E2E:** the verify script pattern lives in the session-scratchpad `verify.mjs`
-  (technique documented in project memory `ext-e2e-verify-technique`): stage a copy of
-  the extension with `host_permissions: ["<all_urls>"]` added, launch
-  `chromium.launchPersistentContext` with `--load-extension`, open
-  `chrome-extension://<id>/popup/popup.html` in a tab, and drive `chrome.runtime.sendMessage`
-  / `chrome.scripting` from that page. Run it from `tools/keyboard-trap-scan/` so
-  `playwright` resolves. Assert against `data-expect` in test-pages. Was 30/30 at build.
-  Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
+- **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 58/58 on 2026-10-07. It stages
+  a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
+  folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
+  `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
+  `chrome.runtime.sendMessage` and `chrome.scripting` from that page. It asserts against
+  `data-expect` in test-pages. It covers motion 2.B, audio, Reload and record, and the
+  batch runner; older checkers have no section yet — **extend it with each new checker**
+  (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
   `data-expect-blocked`, `data-expect-recorded`): launch twice, with
   `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
   (Playwright sets no autoplay flag by default). Under Playwright,
