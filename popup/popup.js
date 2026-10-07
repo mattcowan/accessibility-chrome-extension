@@ -9,6 +9,10 @@ const LIBS = ['checkers/lib/selector.js', 'checkers/lib/findings.js'];
 const OVERLAY = 'checkers/lib/overlay.js';
 // Mechanism finder for auto-playing content (TT 2.A / 2.B); needs accname.
 const MECHANISM = ['checkers/lib/accname.js', 'checkers/lib/mechanism.js'];
+// Focus-indicator style diff shared by the Focus visibility walker and the
+// focus locator.
+const FOCUS_STYLE = 'checkers/lib/focus-style.js';
+const LOCATOR_FILES = [...LIBS, 'checkers/lib/accname.js', FOCUS_STYLE, 'checkers/focus-locator.js'];
 // After Reload and record, wait this long for page scripts to start audio
 // (and for Chrome's tab "audible" flag, which lags a moment) before checking.
 const RECORD_SETTLE_MS = 4000;
@@ -257,6 +261,7 @@ const BADGE_BY_TOOL = {
   audio: 'badge-audio',
   'text-spacing': 'badge-text-spacing',
   'focus-visibility': 'badge-focus',
+  'keyboard-access': 'badge-keyboard-access',
   'target-size': 'badge-target-size',
   'hover-content': 'badge-hover',
   reflow: 'badge-reflow',
@@ -488,9 +493,9 @@ async function highlightAllForTool(tool) {
 // runs after target-size/reflow (its analyze pass applies the override
 // stylesheet, which would skew their measurements) and the slow hover probe
 // runs last. The stateful toggles (text-spacing apply/remove, accname
-// inspector, live-regions monitor) are deliberately not batchable and stay
-// outside the registry, as does audio's Reload and record (it reloads the
-// page, which would reset what the other checkers measure).
+// inspector, live-regions monitor, focus locator) are deliberately not
+// batchable and stay outside the registry, as does audio's Reload and record
+// (it reloads the page, which would reset what the other checkers measure).
 const CHECKERS = [
   { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
     files: [...MECHANISM, 'checkers/motion-check.js'], fnName: 'motion', allFrames: true,
@@ -499,7 +504,10 @@ const CHECKERS = [
     files: [...MECHANISM, 'checkers/audio-check.js'],
     batchDefault: true },
   { id: 'focus-visibility', tool: 'focus-visibility', buttonId: 'run-focus', kind: 'simple',
-    files: [OVERLAY, 'checkers/focus-walker.js'], fnName: 'focusWalker',
+    files: [OVERLAY, FOCUS_STYLE, 'checkers/focus-walker.js'], fnName: 'focusWalker',
+    batchDefault: true },
+  { id: 'keyboard-access', tool: 'keyboard-access', buttonId: 'run-keyboard-access', kind: 'keyboard',
+    files: [OVERLAY, 'checkers/keyboard-access.js'],
     batchDefault: true },
   { id: 'target-size', tool: 'target-size', buttonId: 'run-target-size', kind: 'simple',
     files: [OVERLAY, 'checkers/target-size.js'], fnName: 'targetSize', allFrames: true,
@@ -625,9 +633,39 @@ async function execAudio(entry) {
   return { tool: 'audio', count: stored.findings.length, hooked };
 }
 
+// Mouse-only scan (2.1.1 / TT 4.A): the SW reads the page's click listeners
+// over CDP first (content scripts cannot see them), then the checker runs in
+// every frame with them. Without the listeners the scan still runs on its
+// static signals, and one '(page)' note says what was not covered.
+async function execKeyboardAccess(entry) {
+  const res = await send({ type: 'clickListeners' }).catch((e) => ({ ok: false, error: e.message }));
+  await inject([...LIBS, ...entry.files], true);
+  const arg = { listenerPaths: res && res.ok ? res.paths : null };
+  const results = await callChecker('keyboardAccess', arg, true);
+  const findings = results.flatMap((r) => (Array.isArray(r.result) ? r.result : []));
+  let note = '';
+  if (!res || !res.ok) {
+    note =
+      `The page's click listeners could not be read (${(res && res.error) || 'no response'}). ` +
+      'Elements whose only sign of being clickable is a script click handler (no pointer cursor, onclick attribute or role) were not checked. ' +
+      'Close DevTools on this tab and run the scan again, or check those elements by hand.';
+  } else if (res.truncated) {
+    note = 'The page has more elements with click listeners than the scan reads; some were not checked by their listeners.';
+  }
+  if (note) {
+    // Keep one '(page)' finding per tool so the diff fingerprint stays unique.
+    const page = findings.find((f) => f.selector === '(page)');
+    if (page) page.details += ` ${note}`;
+    else findings.push({ tool: 'keyboard-access', wcag: '2.1.1', severity: 'review', selector: '(page)', snippet: '', details: note });
+  }
+  const stored = await storeToolFindings('keyboard-access', findings);
+  return { tool: 'keyboard-access', count: stored.findings.length };
+}
+
 function execEntry(entry) {
   if (entry.kind === 'hover') return execHover(entry);
   if (entry.kind === 'audio') return execAudio(entry);
+  if (entry.kind === 'keyboard') return execKeyboardAccess(entry);
   return execChecker(entry);
 }
 
@@ -735,6 +773,18 @@ async function refreshAccnameButton() {
   }
 }
 
+async function refreshFocusLocatorButton() {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.documentElement.dataset.a11yFocusLocator === 'on',
+    });
+    $('toggle-focus-locator').textContent = res.result ? 'Stop locator' : 'Start locator';
+  } catch {
+    // leave default label
+  }
+}
+
 async function refreshLiveRegionsButton() {
   try {
     const [res] = await chrome.scripting.executeScript({
@@ -790,6 +840,7 @@ function wireCheckers() {
       refreshTextSpacingButton();
       refreshAccnameButton();
       refreshLiveRegionsButton();
+      refreshFocusLocatorButton();
     } catch (err) {
       checkerError(err);
     } finally {
@@ -829,6 +880,27 @@ function wireCheckers() {
       } else {
         e.target.textContent = 'Start inspector';
       }
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+
+  // Focus locator: watches focus while the tester presses Tab by hand. Like
+  // every popup injection, starting it gives the page user activation (#15).
+  $('toggle-focus-locator').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await inject(LOCATOR_FILES);
+      const starting = e.target.textContent.startsWith('Start');
+      await callChecker('focusLocator', starting ? 'start' : 'stop');
+      e.target.textContent = starting ? 'Stop locator' : 'Start locator';
+      announce(
+        starting
+          ? 'focus locator: on. Click the page, then press Tab; the outline follows focus.'
+          : 'focus locator: off.'
+      );
     } catch (err) {
       checkerError(err);
     } finally {
@@ -900,8 +972,8 @@ function wireCheckers() {
 
   // Full reset: every artifact a checker leaves on the page (overlay layer,
   // text-spacing override stylesheet, live accname inspector, live-region log
-  // panels), plus this tab's stored findings. Motion/reflow/hover leave
-  // nothing behind.
+  // panels, focus locator), plus this tab's stored findings. Motion/reflow/
+  // hover leave nothing behind.
   $('clear-all-checkers').addEventListener('click', async (e) => {
     e.target.disabled = true;
     banner('');
@@ -920,6 +992,9 @@ function wireCheckers() {
       await inject(LIVE_FILES);
       await callChecker('liveRegions', 'stop');
       $('toggle-live-regions').textContent = 'Start monitor';
+      await inject(LOCATOR_FILES);
+      await callChecker('focusLocator', 'stop');
+      $('toggle-focus-locator').textContent = 'Start locator';
       await clearFindingsStore();
       announce('Cleared overlays, spacing overrides, inspectors, and findings for this tab.');
     } catch (err) {
@@ -1031,6 +1106,7 @@ async function refreshForActiveTab() {
   refreshTextSpacingButton();
   refreshAccnameButton();
   refreshLiveRegionsButton();
+  refreshFocusLocatorButton();
 }
 
 async function init() {

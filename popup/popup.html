@@ -114,6 +114,21 @@
       <span class="badge" id="badge-focus" hidden></span>
     </div>
     <div class="checker-row">
+      <span class="name">Focus locator <small>TT 4.D vs 4.A — shows where focus is while you press Tab</small></span>
+      <button type="button" id="toggle-focus-locator"
+        title="Outline the focused element and say whether the page shows its own focus indicator. It only watches: press Tab yourself.">Start locator</button>
+    </div>
+    <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="keyboard-access"
+        title="Include in Run selected" aria-label="Include Keyboard access in Run selected">
+      <span class="name">Keyboard access <small>2.1.1 / TT 4.A — mouse-only elements</small></span>
+      <button type="button" id="run-keyboard-access"
+        title="Find elements a mouse can operate but Tab cannot reach. Reads click listeners through the debugger (the debugging bar shows briefly).">
+        Run
+      </button>
+      <span class="badge" id="badge-keyboard-access" hidden></span>
+    </div>
+    <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="target-size"
         title="Include in Run selected" aria-label="Include Target size in Run selected">
       <span class="name">Target size <small>2.5.8</small></span>
@@ -152,7 +167,7 @@
     <div class="checker-row">
       <button type="button" id="clear-overlays" class="secondary">Clear overlays</button>
       <button type="button" id="clear-all-checkers" class="secondary"
-        title="Remove overlays, spacing overrides, and the inspector from the page, and clear this tab's findings">
+        title="Remove overlays, spacing overrides, the inspector, and the focus locator from the page, and clear this tab's findings">
         Clear all checkers
       </button>
     </div>

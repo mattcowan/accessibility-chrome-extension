@@ -5,7 +5,8 @@
 // Heuristic, honestly graded: synthetic focus() may not match :focus-visible,
 // so a computed-style diff is combined with a CSSOM scan of :focus rules.
 // Cross-origin stylesheets can't be read; when any are skipped, hard fails
-// are downgraded to 'review'.
+// are downgraded to 'review'. Needs checkers/lib/focus-style.js (the style
+// diff is shared with the focus locator).
 if (!globalThis.__a11yFocusWalker) {
   globalThis.__a11yFocusWalker = true;
 
@@ -13,43 +14,8 @@ if (!globalThis.__a11yFocusWalker) {
 
   (function () {
     const F = globalThis.__a11yFindings;
+    const { snap, diffKind, deepActiveElement } = globalThis.__a11yFocusStyle;
     const CAP = 400;
-
-    const SNAP_PROPS = [
-      'outlineStyle',
-      'outlineWidth',
-      'outlineColor',
-      'boxShadow',
-      'backgroundColor',
-      'color',
-      'borderTopColor',
-      'borderRightColor',
-      'borderBottomColor',
-      'borderLeftColor',
-      'textDecorationLine',
-    ];
-
-    function snap(el) {
-      const cs = getComputedStyle(el);
-      const out = {};
-      for (const p of SNAP_PROPS) out[p] = cs[p];
-      return out;
-    }
-
-    function diffKind(a, b) {
-      if (
-        a.outlineStyle !== b.outlineStyle ||
-        a.outlineWidth !== b.outlineWidth ||
-        a.outlineColor !== b.outlineColor ||
-        a.boxShadow !== b.boxShadow
-      ) {
-        return 'strong';
-      }
-      for (const p of SNAP_PROPS) {
-        if (a[p] !== b[p]) return 'weak';
-      }
-      return 'none';
-    }
 
     // Does this Chrome honor focus({focusVisible:true})? Probe with a rule
     // that only applies under :focus-visible.
@@ -151,14 +117,6 @@ if (!globalThis.__a11yFocusWalker) {
       if (positive) return 'positive';
       if (suppressive) return 'suppressive';
       return 'none';
-    }
-
-    function deepActiveElement() {
-      let a = document.activeElement;
-      while (a && a.shadowRoot && a.shadowRoot.activeElement) {
-        a = a.shadowRoot.activeElement;
-      }
-      return a;
     }
 
     globalThis.__a11yCheckers.focusWalker = async function focusWalker() {

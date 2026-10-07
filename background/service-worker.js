@@ -75,6 +75,9 @@ async function handle(msg) {
     case 'recordAudio':
       return handleRecordAudio(tabId);
 
+    case 'clickListeners':
+      return handleClickListeners(tabId);
+
     case 'resetTab': {
       const res = await dbg.updateTabState(tabId, (s) => Object.assign(s, dbg.defaultTabState()));
       broadcast(tabId, res.state);
@@ -86,14 +89,43 @@ async function handle(msg) {
   }
 }
 
+// Transient debugger users on a tab (hover probe start→end, the click-listener
+// read, Reload and record). Each holds the session while it works; detachIfIdle
+// runs only when the last one releases, so one user's cleanup cannot detach
+// another mid-way (the popup and the side panel can both drive one tab).
+// In-memory like recordingTabs: if the SW dies, the holds die with it, and the
+// worst case is the old behavior (an early detach). A hover probe whose popup
+// closed before 'end' keeps its hold until the debugger detaches or the tab
+// closes; it left the debugger attached before holds existed too.
+const debuggerHolds = new Map();
+
+function holdDebugger(tabId) {
+  debuggerHolds.set(tabId, (debuggerHolds.get(tabId) || 0) + 1);
+}
+
+async function releaseDebugger(tabId) {
+  const left = (debuggerHolds.get(tabId) || 1) - 1;
+  let state;
+  if (left > 0) {
+    debuggerHolds.set(tabId, left);
+    state = await dbg.getTabState(tabId);
+  } else {
+    debuggerHolds.delete(tabId);
+    state = await dbg.detachIfIdle(tabId);
+  }
+  broadcast(tabId, state);
+  return state;
+}
+
 // The 1.4.13 checker needs real hover + Escape input. The popup orchestrates:
 // start (attach if needed) -> move/escape per candidate -> end (detach if no
-// emulation is otherwise active, so the infobar doesn't linger).
+// emulation or other debugger user is active, so the infobar doesn't linger).
 async function handleHoverProbe(msg) {
   const { tabId, action } = msg;
   switch (action) {
     case 'start': {
       const res = await dbg.ensureAttached(tabId);
+      if (res.ok) holdDebugger(tabId);
       return res.ok ? { ok: true } : { ok: false, error: res.error };
     }
     case 'move':
@@ -103,12 +135,30 @@ async function handleHoverProbe(msg) {
       await dbg.dispatchEscape(tabId);
       return { ok: true };
     case 'end': {
-      const state = await dbg.detachIfIdle(tabId);
-      broadcast(tabId, state);
+      const state = await releaseDebugger(tabId);
       return { ok: true, state };
     }
     default:
       return { ok: false, error: `Unknown hoverProbe action: ${action}` };
+  }
+}
+
+// The mouse-only scan (2.1.1) needs the page's click listeners, which only
+// CDP can read. Attach, read, then detach again if nothing else needs the
+// debugger. Refused during Reload and record: the page is reloading, so the
+// listeners read would belong to a page that is going away.
+async function handleClickListeners(tabId) {
+  if (recordingTabs.has(tabId)) {
+    return { ok: false, error: 'Reload and record is running on this tab' };
+  }
+  holdDebugger(tabId);
+  try {
+    const attach = await dbg.ensureAttached(tabId);
+    if (!attach.ok) return { ok: false, error: attach.error };
+    const { paths, truncated } = await dbg.clickListenerPaths(tabId);
+    return { ok: true, paths, truncated };
+  } finally {
+    await releaseDebugger(tabId);
   }
 }
 
@@ -157,23 +207,27 @@ async function handleRecordAudio(tabId) {
 }
 
 async function recordAudioCycle(tabId) {
-  const attach = await dbg.ensureAttached(tabId);
-  if (!attach.ok) return { ok: false, error: attach.error };
+  holdDebugger(tabId);
   let scriptId = null;
   try {
+    const attach = await dbg.ensureAttached(tabId);
+    if (!attach.ok) return { ok: false, error: attach.error };
     scriptId = await dbg.addScriptOnNewDocument(tabId, AUDIO_HOOK_SOURCE);
     const reloaded = waitForReload(tabId, RECORD_LOAD_TIMEOUT_MS);
     await chrome.tabs.reload(tabId);
     return { ok: true, loaded: await reloaded };
   } finally {
     if (scriptId) await dbg.removeScriptOnNewDocument(tabId, scriptId).catch(() => {});
-    broadcast(tabId, await dbg.detachIfIdle(tabId));
+    await releaseDebugger(tabId);
   }
 }
 
 // Detached externally: infobar "x" clicked, DevTools attached, target crashed.
 chrome.debugger.onDetach.addListener(async (source, reason) => {
   if (!source.tabId) return;
+  // Nothing is attached any more, so no hold can be honored; this also frees
+  // the hold of a hover probe whose popup closed before 'end'.
+  debuggerHolds.delete(source.tabId);
   await dbg.clearTabState(source.tabId);
   broadcast(
     source.tabId,
@@ -185,6 +239,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  debuggerHolds.delete(tabId);
   await dbg.clearTabState(tabId);
   await chrome.storage.session.remove(`findings:${tabId}`);
 });

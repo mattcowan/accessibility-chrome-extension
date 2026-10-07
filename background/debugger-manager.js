@@ -202,6 +202,85 @@ export async function removeScriptOnNewDocument(tabId, identifier) {
   await sendCommand(tabId, 'Page.removeScriptToEvaluateOnNewDocument', { identifier });
 }
 
+// --- Click listeners for the mouse-only scan (2.1.1 / TT 4.A) ---------------
+// Content scripts cannot see addEventListener listeners; CDP can. Returns the
+// child-index path from the top document of every element that has a
+// click-type listener (-1 = enter the open shadow root), for the checker in
+// the page to resolve. Nodes inside iframes return no path (known gap).
+
+const CLICK_TYPES = new Set(['click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup']);
+const LISTENER_NODE_CAP = 500;
+const LISTENER_GROUP = 'a11y-click-listeners';
+// CDP errors for a node or object that no longer exists. "Cannot find
+// context" is deliberately not here: it means the page navigated, and paths
+// read before that point would be resolved against the new page.
+const NODE_GONE = /No node with given id|Could not find (node|object) with given id/i;
+
+// Runs in the page's main world with `this` = the element. No page code is
+// called, and no gesture is passed (Runtime.callFunctionOn defaults to none).
+const PATH_FN = `function () {
+  if (window !== window.top) return null;
+  const path = [];
+  let node = this;
+  while (node && node !== document) {
+    const parent = node.parentNode;
+    if (!parent || !parent.children) return null;
+    let i = 0;
+    while (i < parent.children.length && parent.children[i] !== node) i++;
+    if (i === parent.children.length) return null;
+    path.unshift(i);
+    if (parent.nodeType === 11) {
+      path.unshift(-1);
+      node = parent.host;
+    } else {
+      node = parent;
+    }
+  }
+  return node === document ? path : null;
+}`;
+
+export async function clickListenerPaths(tabId) {
+  try {
+    const { result: doc } = await sendCommand(tabId, 'Runtime.evaluate', {
+      expression: 'document',
+      objectGroup: LISTENER_GROUP,
+    });
+    const { listeners } = await sendCommand(tabId, 'DOMDebugger.getEventListeners', {
+      objectId: doc.objectId,
+      depth: -1,
+      pierce: true,
+    });
+    const ids = [
+      ...new Set(
+        listeners.filter((l) => CLICK_TYPES.has(l.type) && l.backendNodeId).map((l) => l.backendNodeId)
+      ),
+    ];
+    const paths = [];
+    for (const backendNodeId of ids.slice(0, LISTENER_NODE_CAP)) {
+      try {
+        const { object } = await sendCommand(tabId, 'DOM.resolveNode', {
+          backendNodeId,
+          objectGroup: LISTENER_GROUP,
+        });
+        const { result } = await sendCommand(tabId, 'Runtime.callFunctionOn', {
+          objectId: object.objectId,
+          functionDeclaration: PATH_FN,
+          returnByValue: true,
+        });
+        if (Array.isArray(result.value)) paths.push(result.value);
+      } catch (e) {
+        // Only a node that went away between the calls is skipped. Anything
+        // else (the session detached, the tab closed) fails the whole read,
+        // so a partial list is never reported as complete.
+        if (!NODE_GONE.test(e && e.message)) throw e;
+      }
+    }
+    return { paths, truncated: ids.length > LISTENER_NODE_CAP };
+  } finally {
+    await sendCommand(tabId, 'Runtime.releaseObjectGroup', { objectGroup: LISTENER_GROUP }).catch(() => {});
+  }
+}
+
 // --- Input dispatch for the hover/focus-content (1.4.13) probe -------------
 // Real CDP mouse moves trigger CSS :hover, which JS-synthesized events cannot.
 

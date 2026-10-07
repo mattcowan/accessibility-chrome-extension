@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Keyboard Access and Focus Locator (TT 4.A / 4.D)</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .test-section {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+    .test-section h3 { margin-top: 0; font-size: 1rem; }
+    .fake-button {
+      display: inline-block;
+      padding: 0.4rem 0.9rem;
+      background: #0066cc;
+      color: #fff;
+      border-radius: 4px;
+    }
+    .card {
+      padding: 0.75rem;
+      border: 1px solid #999;
+      background: #fff;
+      cursor: pointer;
+    }
+    [role="tab"] { display: inline-block; padding: 0.3rem 0.8rem; border: 1px solid #999; }
+
+    /* Locator (d): outline removed, nothing replaces it. */
+    #no-outline { outline: none; padding: 0.4rem 0.9rem; }
+    /* Locator (e): only the background changes on focus. */
+    #bg-only { outline: none; padding: 0.4rem 0.9rem; background: #e6e6ff; border: 1px solid #0066cc; }
+    #bg-only:focus { background: #9999ff; }
+    /* Locator (f): the indicator is on the parent, through :focus-within. */
+    #parent-ring { outline: none; padding: 0.4rem 0.9rem; }
+    .ring-parent { display: inline-block; padding: 4px; }
+    .ring-parent:focus-within { box-shadow: 0 0 0 3px #b91c1c; }
+    /* Locator (g): a "skip link" that stays off-screen when it gets focus. */
+    #offscreen { position: absolute; left: -9999px; }
+    /* Locator: a site-wide backdrop rule must not dim the page under the
+       locator's top-layer box. */
+    ::backdrop { background: rgba(0, 0, 0, 0.5); }
+  </style>
+</head>
+<body>
+  <h1>Keyboard Access and Focus Locator</h1>
+  <p>
+    Fixture for the Keyboard access scan (WCAG 2.1.1, Trusted Tester 4.A) and the focus locator (TT 4.D vs 4.A).
+    <code>data-expect</code> is the scan's expected grade. <code>data-expect-focus</code> is the locator's expected verdict when the element gets focus from Tab.
+  </p>
+
+  <a href="#" id="offscreen" data-expect-focus="hidden">Skip to content (never comes on screen)</a>
+
+  <div class="test-section">
+    <h3>Scan (a): div with an onclick attribute, no tabindex</h3>
+    <div id="click-div" class="fake-button" onclick="this.textContent = 'Clicked'" data-expect="review">Save draft</div>
+  </div>
+
+  <div class="test-section">
+    <h3>Scan (b): span with role="button", no tabindex</h3>
+    <span id="span-button" class="fake-button" role="button" data-expect="review">Delete</span>
+  </div>
+
+  <div class="test-section">
+    <h3>Scan (c): div with only a script click listener (no cursor, no role)</h3>
+    <div id="listener-div" data-expect="review">Expand details</div>
+  </div>
+
+  <div class="test-section">
+    <h3>Scan (d): div with only a pointer cursor</h3>
+    <div id="pointer-div" style="cursor: pointer;" data-expect="review">Next page</div>
+  </div>
+
+  <div class="test-section">
+    <h3>Scan (e): role="button" with tabindex="-1"</h3>
+    <div id="neg-tabindex" class="fake-button" role="button" tabindex="-1" data-expect="review">Close</div>
+  </div>
+
+  <div class="test-section">
+    <h3>Scan (f): clickable card that contains a link (review: the link may do the same thing)</h3>
+    <div id="card" class="card" onclick="location.hash = 'story'" data-expect="review">
+      <strong>Story title</strong>
+      <a href="#story" id="card-link">Read the story</a>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (g): native button</h3>
+    <button id="native-button" type="button" data-expect="pass" data-expect-focus="visible">Search</button>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (h): clickable div inside a link</h3>
+    <a href="#inside" id="link-wrap"><div id="div-in-link" onclick="return true" style="cursor: pointer;" data-expect="pass">Clickable div inside a link</div></a>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (i): button with outline: none and no other focus style (2.4.7, not 2.1.1)</h3>
+    <button id="no-outline" type="button" data-expect="pass" data-expect-focus="none">Print</button>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (j): focus shown only by a background change</h3>
+    <button id="bg-only" type="button" data-expect="pass" data-expect-focus="subtle">Share</button>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (k): focus shown on the parent (:focus-within)</h3>
+    <span class="ring-parent"><button id="parent-ring" type="button" data-expect="pass" data-expect-focus="elsewhere">Copy</button></span>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (l): roving tabindex tab list (arrow keys reach the second tab)</h3>
+    <div role="tablist" aria-label="Sections">
+      <div role="tab" id="tab-1" tabindex="0" aria-selected="true">One</div>
+      <div role="tab" id="tab-2" tabindex="-1" aria-selected="false" data-expect="pass">Two</div>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (m): label for a checkbox, with a pointer cursor</h3>
+    <input type="checkbox" id="agree">
+    <label for="agree" id="agree-label" style="cursor: pointer;" data-expect="pass">I agree</label>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (n): disabled custom button</h3>
+    <div id="aria-disabled" class="fake-button" role="button" aria-disabled="true" data-expect="pass">Submit</div>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (o): plain text on a page with a click listener on &lt;body&gt; (delegation)</h3>
+    <p id="plain-text" data-expect="pass">This paragraph is not clickable. The body listener must not make it a finding.</p>
+  </div>
+
+  <div class="test-section">
+    <h3>Shadow DOM: a span role="button" (review) and a native button</h3>
+    <div id="shadow-host"></div>
+  </div>
+
+  <div class="test-section">
+    <h3>Same-origin iframe with a native button</h3>
+    <iframe id="frame" title="Embedded form" style="width: 100%; height: 70px; border: 1px solid #999;"
+      srcdoc="<!DOCTYPE html><html lang='en'><body style='font-family:system-ui;margin:8px'><button id='frame-btn' type='button'>Send</button></body></html>"></iframe>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (p): rich-text editor root (contenteditable, no tabindex), with a clickable chip inside</h3>
+    <div id="editor" contenteditable="true" role="textbox" aria-label="Message" aria-multiline="true"
+      style="min-height: 3rem; padding: 0.5rem; border: 1px solid #999; background: #fff;" data-expect="pass">
+      Hello <span id="editor-chip" onclick="return true" style="cursor: pointer; background: #def;" data-expect="pass">@Sam</span>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h3>Pass (q): app root with a delegated click listener (React 17+ pattern) that holds controls</h3>
+    <div id="app-root" data-expect="pass">
+      <button id="app-button" type="button">Open cart</button>
+    </div>
+  </div>
+
+  <hr>
+  <p><a href="index.html" id="back-link">← Back to index</a></p>
+
+  <script>
+    // Scan (c): a script listener only. Content scripts cannot see this; the
+    // scan reads it through CDP.
+    document.getElementById('listener-div').addEventListener('click', (e) => {
+      e.currentTarget.textContent = 'Details expanded';
+    });
+    // Pass (o): delegation on <body> must not mark every element clickable.
+    document.body.addEventListener('click', () => {});
+    // Pass (q): React 17+ attaches its delegated listeners to the root container.
+    document.getElementById('app-root').addEventListener('click', () => {});
+
+    const root = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
+    root.innerHTML =
+      '<span id="shadow-span" role="button" style="padding:0.3rem 0.7rem;background:#eee">Shadow action</span> ' +
+      '<button id="shadow-btn" type="button">Shadow button</button>';
+  </script>
+</body>
+</html>

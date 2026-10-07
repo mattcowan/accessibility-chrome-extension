@@ -10,8 +10,9 @@
 //
 // Coverage today: motion 2.2.2 / TT 2.B mechanisms, the audio checker
 // (1.4.2 / TT 2.A) under allowed and blocked autoplay, Reload and record
-// (popup and side-panel contexts), the batch runner, and the recorder
-// handshake. Older checkers (text spacing, target size, focus, hover, reflow,
+// (popup and side-panel contexts), the batch runner, the recorder
+// handshake, the keyboard access scan (2.1.1 / TT 4.A) and the focus locator
+// (real Tab / Shift+Tab presses). Older checkers (text spacing, target size, focus, hover, reflow,
 // accname, live regions) are not covered yet; add a section per checker.
 //
 // How it works (see CLAUDE.md "Verify changes" for the gotchas):
@@ -360,6 +361,197 @@ try {
       const got = severityFor(f, e.sel, '1.4.2');
       check(`[panel recorded] audio-autoplay.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}`);
     }
+    await page.close();
+  }
+  await env.ctx.close();
+
+  // ============ #20: keyboard access scan (2.1.1 / TT 4.A) + focus locator ============
+  env = await launch('no-user-gesture-required');
+  {
+    const { page, tabId } = await openFixture(env, 'keyboard-access.html', 800);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await clickAndWait(env, 'run-keyboard-access', /^keyboard-access: \d+ findings/);
+    const f = await storedFindings(env, tabId, 'keyboard-access');
+    for (const e of await expectations(env, tabId)) {
+      const got = severityFor(f, e.sel, '2.1.1');
+      check(`[keyboard-access] keyboard-access.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}; findings: ${JSON.stringify(f.map((x) => [x.severity, x.selector, x.details.slice(0, 90)]))}`);
+    }
+    const shadow = severityFor(f, '#shadow-host >>> #shadow-span', '2.1.1');
+    check('[keyboard-access] span role=button in an open shadow root → review', shadow === 'review', `got ${shadow}`);
+    check('[keyboard-access] every finding is 2.1.1 review', f.length > 0 && f.every((x) => x.wcag === '2.1.1' && x.severity === 'review'), JSON.stringify(f.map((x) => [x.wcag, x.severity])));
+    const listenerDiv = f.find((x) => x.selector === '#listener-div');
+    check('[keyboard-access] #listener-div found through its CDP click listener', !!listenerDiv && /a click listener/.test(listenerDiv.details), JSON.stringify(listenerDiv));
+    check('[keyboard-access] no "(page)" note: click listeners were read', !f.some((x) => x.selector === '(page)'), JSON.stringify(f.filter((x) => x.selector === '(page)')));
+    const state = await env.popup.evaluate(
+      async (tabId) => (await chrome.storage.session.get(`tab:${tabId}`))[`tab:${tabId}`] || null,
+      tabId
+    );
+    check('[keyboard-access] extension detached after reading listeners', !state || !state.attached, JSON.stringify(state));
+
+    // Debugger holds: a listener read during a hover probe must not detach
+    // the probe's session; the probe's 'end' detaches.
+    const held = await env.popup.evaluate(async (tabId) => {
+      const tabState = async () => ((await chrome.storage.session.get(`tab:${tabId}`))[`tab:${tabId}`] || {}).attached === true;
+      const start = await chrome.runtime.sendMessage({ type: 'hoverProbe', action: 'start', tabId });
+      const read = await chrome.runtime.sendMessage({ type: 'clickListeners', tabId });
+      const duringProbe = await tabState();
+      await chrome.runtime.sendMessage({ type: 'hoverProbe', action: 'end', tabId });
+      return { start: start.ok, read: read.ok, duringProbe, afterEnd: await tabState() };
+    }, tabId);
+    check('[keyboard-access] listener read keeps a running hover probe attached', held.start && held.read && held.duringProbe, JSON.stringify(held));
+    check('[keyboard-access] hover probe end then detaches', !held.afterEnd, JSON.stringify(held));
+
+    // The outline:none button is a 2.4.7 problem for Focus visibility, not 2.1.1.
+    await clickAndWait(env, 'run-focus', /^focus-visibility: \d+ findings/);
+    const fv = await storedFindings(env, tabId, 'focus-visibility');
+    const got = severityFor(fv, '#no-outline', '2.4.7');
+    check('[focus-visibility] keyboard-access.html #no-outline → 2.4.7 fail', got === 'fail', `got ${got}`);
+
+    // Batch runs the scan.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => {
+      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'keyboard-access';
+    });
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+    const bf = await storedFindings(env, tabId, 'keyboard-access');
+    check('[batch] Run selected runs the keyboard access scan', bf.some((x) => x.selector === '#click-div'), JSON.stringify(bf.map((x) => x.selector)));
+    await page.close();
+  }
+
+  // Focus locator: real Tab / Shift+Tab presses; the locator must follow
+  // focus into the shadow root and the same-origin iframe, and grade the
+  // page's own indicator per data-expect-focus.
+  {
+    const { page, tabId } = await openFixture(env, 'keyboard-access.html', 800);
+    // The element the page really focused, as the locator's selector would
+    // name it (selector.js is id-first; every tab stop has an id).
+    const realFocus = () =>
+      page.evaluate(() => {
+        let doc = document;
+        for (;;) {
+          let a = doc.activeElement;
+          const chain = [];
+          while (a && a.shadowRoot && a.shadowRoot.activeElement) {
+            chain.push(a);
+            a = a.shadowRoot.activeElement;
+          }
+          if (a && a.tagName === 'IFRAME' && a.contentDocument) {
+            doc = a.contentDocument;
+            continue;
+          }
+          const leaf = a;
+          return {
+            sel: [...chain, leaf].map((e) => `#${e.id}`).join(' >>> '),
+            expect: leaf.getAttribute('data-expect-focus'),
+          };
+        }
+      });
+    const locator = () =>
+      page.evaluate(() => {
+        const l = document.getElementById('__a11y-focus-locator');
+        if (!l) return null;
+        const r = l.firstChild.getBoundingClientRect();
+        return { ...l.dataset, box: { x: r.x, y: r.y, w: r.width, h: r.height } };
+      });
+    const pageRect = (sel) =>
+      page.evaluate((sel) => {
+        if (sel === '#frame-btn') {
+          const fr = document.getElementById('frame');
+          const o = fr.getBoundingClientRect();
+          const r = fr.contentDocument.getElementById('frame-btn').getBoundingClientRect();
+          return { x: o.x + fr.clientLeft + r.x, y: o.y + fr.clientTop + r.y };
+        }
+        const r = document.getElementById('shadow-host').shadowRoot.getElementById('shadow-btn').getBoundingClientRect();
+        return { x: r.x, y: r.y };
+      }, sel);
+
+    await page.keyboard.press('Tab'); // #offscreen, before the locator starts
+    await sleep(200);
+    const before = await realFocus();
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#toggle-focus-locator');
+    await env.popup.waitForFunction(() => /focus locator: on/.test(document.getElementById('status').textContent));
+    await sleep(400);
+    const after = await realFocus();
+    check('[locator] starting it does not move focus', before.sel === after.sel && after.sel === '#offscreen', `${before.sel} → ${after.sel}`);
+    let loc = await locator();
+    check('[locator] off-screen skip link → hidden (4.D, not 4.A)', loc && loc.target === '#offscreen' && loc.verdict === 'hidden', JSON.stringify(loc));
+    // The fixture has `::backdrop { background: rgba(0,0,0,.5) }`; the
+    // locator's top-layer box must not take it and dim the page.
+    const backdrop = await page.evaluate(() => {
+      const cs = getComputedStyle(document.getElementById('__a11y-focus-locator'), '::backdrop');
+      return { display: cs.display, background: cs.backgroundColor };
+    });
+    check('[locator] page ::backdrop rule does not dim the page', backdrop.display === 'none' || backdrop.background === 'rgba(0, 0, 0, 0)', JSON.stringify(backdrop));
+
+    // Every element with a locator expectation, so a fixture change that
+    // drops one from the Tab walk fails instead of skipping its check.
+    const expectFocus = await page.evaluate(() => [...document.querySelectorAll('[data-expect-focus]')].map((e) => `#${e.id}`));
+    const visited = ['#offscreen'];
+    const step = async (key) => {
+      await page.keyboard.press(key);
+      await sleep(300);
+      const real = await realFocus();
+      loc = await locator();
+      visited.push(real.sel);
+      check(`[locator] ${key} → ${real.sel} tracked`, !!loc && loc.target === real.sel, `locator ${JSON.stringify(loc)}`);
+      if (real.expect) {
+        check(`[locator] ${real.sel} verdict → ${real.expect}`, loc && loc.verdict === real.expect, `got ${loc && loc.verdict}`);
+      }
+      if (real.sel === '#frame-btn' || real.sel === '#shadow-host >>> #shadow-btn') {
+        const r = await pageRect(real.sel);
+        // Box = element rect grown by GAP (4) + border (3) on each side.
+        const ok = Math.abs(loc.box.x + 7 - r.x) < 2 && Math.abs(loc.box.y + 7 - r.y) < 2;
+        check(`[locator] box drawn on ${real.sel}`, ok, `box ${JSON.stringify(loc.box)} vs element ${JSON.stringify(r)}`);
+      }
+    };
+    for (let i = 0; i < 11; i++) await step('Tab');
+    for (let i = 0; i < 3; i++) await step('Shift+Tab');
+    check('[locator] walk reached the shadow-root and iframe buttons', visited.includes('#shadow-host >>> #shadow-btn') && visited.includes('#frame-btn'), JSON.stringify(visited));
+    const missed = expectFocus.filter((sel) => !visited.includes(sel));
+    check(`[locator] walk visited all ${expectFocus.length} data-expect-focus elements`, expectFocus.length >= 5 && !missed.length, `missed ${JSON.stringify(missed)}`);
+    // A button added after the start gets its baseline when it is inserted,
+    // so its first verdict is a real one ('none'), not 'unknown'.
+    await page.evaluate(() => {
+      const b = document.createElement('button');
+      b.id = 'late-btn';
+      b.type = 'button';
+      b.textContent = 'Added later';
+      b.style.outline = 'none';
+      b.setAttribute('data-expect-focus', 'none');
+      document.getElementById('agree').after(b);
+    });
+    await sleep(200);
+    await step('Tab');
+    check('[locator] Tab reached the button added after the start', visited[visited.length - 1] === '#late-btn', JSON.stringify(visited.slice(-1)));
+
+    // The popup re-syncs its button label from the page marker.
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.getElementById('toggle-focus-locator').textContent === 'Stop locator', null, { timeout: 5000 }).catch(() => {});
+    const label = await env.popup.evaluate(() => document.getElementById('toggle-focus-locator').textContent);
+    check('[locator] reopened popup shows "Stop locator"', label === 'Stop locator', label);
+
+    // Turning it off removes everything it added, and it stays gone on Tab.
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#toggle-focus-locator');
+    await env.popup.waitForFunction(() => /focus locator: off/.test(document.getElementById('status').textContent));
+    await page.keyboard.press('Tab');
+    await sleep(300);
+    const leftovers = await page.evaluate(() => ({
+      layer: !!document.getElementById('__a11y-focus-locator'),
+      marker: document.documentElement.hasAttribute('data-a11y-focus-locator'),
+      ids: [...document.querySelectorAll('[id^="__a11y"]')].map((e) => e.id),
+    }));
+    check('[locator] stop removes the layer and the marker', !leftovers.layer && !leftovers.marker, JSON.stringify(leftovers));
+
+    // Clear all checkers also stops it.
+    await env.popup.click('#toggle-focus-locator');
+    await env.popup.waitForFunction(() => /focus locator: on/.test(document.getElementById('status').textContent));
+    await clickAndWait(env, 'clear-all-checkers', /^Cleared/);
+    await sleep(200);
+    const cleared = await page.evaluate(() => !document.getElementById('__a11y-focus-locator') && !document.documentElement.hasAttribute('data-a11y-focus-locator'));
+    const label2 = await env.popup.evaluate(() => document.getElementById('toggle-focus-locator').textContent);
+    check('[locator] Clear all checkers stops the locator', cleared && label2 === 'Start locator', `${cleared} ${label2}`);
     await page.close();
   }
   await env.ctx.close();
