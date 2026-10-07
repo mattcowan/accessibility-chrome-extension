@@ -17,6 +17,7 @@ const RECORD_SETTLE_MS = 4000;
 // page. Inject nothing into the reloaded page until it has expired.
 const ACTIVATION_EXPIRY_MS = 6000;
 let recordingAudio = false; // Reload and record in progress (side panel guards)
+let tabSwitchedWhileRecording = false; // side panel: re-sync once recording ends
 const LIVE_FILES = [...LIBS, 'checkers/live-regions.js'];
 const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
 
@@ -760,10 +761,13 @@ function wireCheckers() {
   // While it runs, recordingAudio keeps the button disabled through the side
   // panel's restricted-UI reset and stops the panel's reload refresh from
   // injecting into the page (that injection would carry the click's gesture
-  // and make page audio look user-started).
+  // and make page audio look user-started). It also holds `tab` fixed: a tab
+  // switch in the side panel is deferred until the run ends, so the reload and
+  // the checker always target the same tab.
   $('record-audio').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const clickedAt = Date.now();
+    const recordedTabId = tab.id;
     recordingAudio = true;
     btn.disabled = true;
     banner('');
@@ -775,6 +779,7 @@ function wireCheckers() {
         return;
       }
       await sleep(Math.max(RECORD_SETTLE_MS, ACTIVATION_EXPIRY_MS - (Date.now() - clickedAt)));
+      if (tab.id !== recordedTabId) throw new Error('The tab changed during Reload and record. Run it again.');
       const { count, hooked } = await execAudio(CHECKERS.find((c) => c.id === 'audio'));
       announce(`audio: ${count} findings after a recorded reload`);
       const problems = [];
@@ -790,6 +795,10 @@ function wireCheckers() {
     } finally {
       recordingAudio = false;
       btn.disabled = false;
+      if (tabSwitchedWhileRecording) {
+        tabSwitchedWhileRecording = false;
+        refreshForActiveTab();
+      }
     }
   });
 
@@ -1057,7 +1066,14 @@ async function init() {
   });
 
   if (IS_PANEL) {
-    chrome.tabs.onActivated.addListener(() => refreshForActiveTab());
+    chrome.tabs.onActivated.addListener(() => {
+      // Deferred during Reload and record, which must keep targeting its tab.
+      if (recordingAudio) {
+        tabSwitchedWhileRecording = true;
+        return;
+      }
+      refreshForActiveTab();
+    });
     chrome.tabs.onUpdated.addListener((tabId, info) => {
       // Fires for every tab — only react to the one this panel tracks.
       // Skipped during Reload and record: the refresh would inject into the

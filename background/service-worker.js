@@ -137,7 +137,26 @@ function waitForReload(tabId, timeoutMs) {
   });
 }
 
+// Tabs with a recording in progress. The popup and the side panel can both be
+// open on one tab, and a second run would remove the first one's script and
+// detach mid-reload. In-memory is safe here, unlike emulation state: the open
+// message channel keeps the SW alive for the whole cycle, and if the SW dies
+// the cycle dies with it.
+const recordingTabs = new Set();
+
 async function handleRecordAudio(tabId) {
+  if (recordingTabs.has(tabId)) {
+    return { ok: false, error: 'Reload and record is already running on this tab.' };
+  }
+  recordingTabs.add(tabId);
+  try {
+    return await recordAudioCycle(tabId);
+  } finally {
+    recordingTabs.delete(tabId);
+  }
+}
+
+async function recordAudioCycle(tabId) {
   const attach = await dbg.ensureAttached(tabId);
   if (!attach.ok) return { ok: false, error: attach.error };
   let scriptId = null;

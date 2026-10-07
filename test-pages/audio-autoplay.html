@@ -72,9 +72,12 @@
 
   <div class="case defect">
     <strong>3.5-second autoplay (defect):</strong> over the 3-second threshold,
-    no loop, no controls. It has usually ended by the time a checker runs.
+    no loop, no controls. It has usually ended by the time a checker runs. A
+    static Run cannot tell who started an ended clip (review); Reload and
+    record can (fail when autoplay is allowed). data-expect assumes the clip
+    has ended (the E2E run waits 5 s before checking this page).
     <audio id="over" autoplay data-tone="3.5"
-      data-expect="fail" data-expect-blocked="review" data-expect-recorded="review"></audio>
+      data-expect="review" data-expect-blocked="review" data-expect-recorded="review"></audio>
   </div>
 
   <div class="case">

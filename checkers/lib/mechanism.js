@@ -91,6 +91,26 @@ if (!globalThis.__a11yMechanism) {
       return out;
     }
 
+    // Page snapshot shared by every find() call in one checker run, so a page
+    // with many media elements walks the DOM once, not once per element.
+    // Checkers call find() synchronously, so the snapshot is dropped on the
+    // next task and the next run (after the page may have changed) rebuilds it.
+    let snapshot = null;
+    function pageSnapshot() {
+      if (!snapshot) {
+        snapshot = {
+          order: encounterOrder(),
+          tabStops: collectFocusables(document),
+          interactive: collectInteractive(document),
+          names: new Map(), // element -> accessible name, filled on demand
+        };
+        setTimeout(() => {
+          snapshot = null;
+        }, 0);
+      }
+      return snapshot;
+    }
+
     // [lo, hi] indices the target occupies in the order list. A target that
     // is not itself a stop (a wrapper div) spans the stops inside it; an
     // empty one sits where the next stop after it would be.
@@ -127,18 +147,18 @@ if (!globalThis.__a11yMechanism) {
     function find(target, test) {
       const rule = TESTS[test];
       if (!rule) throw new Error(`Unknown Trusted Tester test: ${test}`);
+      const { order, tabStops, interactive, names } = pageSnapshot();
       const candidates = [];
       if (target.controls) candidates.push({ el: target, name: 'native media controls' });
-      for (const el of collectInteractive(document)) {
+      for (const el of interactive) {
         if (el === target) continue;
-        const name = nameOf(el);
+        if (!names.has(el)) names.set(el, nameOf(el));
+        const name = names.get(el);
         if (rule.verbs.test(name) || controlsTarget(el, target)) candidates.push({ el, name });
       }
       if (!candidates.length) return null;
 
-      const order = encounterOrder();
       const [lo, hi] = rangeOf(target, order);
-      const tabStops = collectFocusables(document);
       const rank = { first3: 0, near: 1, elsewhere: 2 };
       let best = null;
       for (const c of candidates) {

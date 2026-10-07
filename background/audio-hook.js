@@ -26,7 +26,11 @@ function audioHook() {
 
   const t0 = performance.now();
   const records = [];
-  const elementOf = new Map(); // record -> media element
+  // Neither map keeps a media element alive: pages that create many Audio
+  // objects (sound effects) would otherwise hold every one for the page's
+  // lifetime. A collected element is reported like one not in the page.
+  const elementOf = new Map(); // record -> WeakRef(media element)
+  const latestFor = new WeakMap(); // media element -> its latest record
   const userActive = () => !!(navigator.userActivation && navigator.userActivation.isActive);
   const now = () => Math.round(performance.now() - t0);
 
@@ -43,7 +47,8 @@ function audioHook() {
       outcome: 'pending',
     };
     records.push(rec);
-    elementOf.set(rec, el);
+    elementOf.set(rec, new WeakRef(el));
+    latestFor.set(el, rec);
     return rec;
   }
 
@@ -82,8 +87,7 @@ function audioHook() {
     (e) => {
       const el = e.target;
       if (!(el instanceof HTMLMediaElement)) return;
-      let latest = null;
-      for (const [rec, known] of elementOf) if (known === el) latest = rec;
+      const latest = latestFor.get(el) || null;
       if (latest && (latest.outcome === 'pending' || latest.outcome === 'played')) return;
       const rec = mediaRecord(el, latest ? 'resumed' : 'autoplay');
       rec.outcome = 'played';
@@ -119,7 +123,8 @@ function audioHook() {
       new CustomEvent('__a11y-audio-rec', { detail: JSON.stringify({ kind: 'hook' }), bubbles: true, composed: true })
     );
     for (const rec of records) {
-      const el = elementOf.get(rec);
+      const ref = elementOf.get(rec);
+      const el = ref && ref.deref();
       const target = el && el.isConnected ? el : document;
       target.dispatchEvent(
         new CustomEvent('__a11y-audio-rec', {

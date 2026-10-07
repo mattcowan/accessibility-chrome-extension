@@ -174,13 +174,30 @@ globalThis.__a11yCheckers.audio = function audio() {
 
     // Stopped or ended after playing. Audio that started on its own and ran
     // more than 3 seconds broke 1.4.2 even if it is quiet by the time a
-    // checker runs (a 3.5 s clip has always ended by then).
+    // checker runs (a 3.5 s clip has always ended by then). Only a recorded
+    // start (user: false) proves that; the autoplay attribute alone gives
+    // review, because a user restart after blocked autoplay looks the same.
     const startedAuto = rec ? rec.outcome === 'played' && rec.user === false : el.autoplay;
     if (startedAuto && (el.ended || el.currentTime > 0)) {
       const secs = playedSeconds(el);
       const shown = secs.toFixed(1);
       const m = find(el, '2.A');
-      if (secs > 3) {
+      if (secs > 3 && !rec) {
+        // No recording: the autoplay attribute is not proof here. If Chrome
+        // blocked the autoplay and the user pressed play (and maybe paused),
+        // the element looks the same. Graded honestly as review.
+        findings.push(
+          makeFinding({
+            tool: 'audio',
+            wcag: '1.4.2',
+            severity: 'review',
+            el,
+            details:
+              `This autoplay element played for ${shown} seconds and has ${el.ended ? 'ended' : 'stopped'}, but this check cannot tell whether it started on its own or the user started it after the browser blocked autoplay. ` +
+              `Use Reload and record to confirm. If it starts on its own, ${RULE} needs a control within the first three elements. ${mechanismSentence(m)}`,
+          })
+        );
+      } else if (secs > 3) {
         autoFinding(el, m, `Audio played automatically for ${shown} seconds and has ${el.ended ? 'ended' : 'stopped'}.`);
       } else {
         findings.push(
