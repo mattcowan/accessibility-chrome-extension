@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio Autoplay Defects</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .case { margin: 1.5rem 0; padding: 1rem; border: 2px solid #999; background: #f9f9f9; }
+    .defect { border-color: red; background: #ffe6e6; }
+    iframe { width: 100%; height: 80px; border: 1px solid #999; }
+  </style>
+</head>
+<body>
+  <!--
+    WCAG 1.4.2 / Trusted Tester 2.A fixture. Audio sources are WAV tones
+    generated in the script at the end (no binary files in the repo).
+    Expectations depend on the autoplay policy, so each case carries:
+      data-expect          browser allows autoplay (audio plays)
+      data-expect-blocked  browser blocks unmuted autoplay (static Run)
+      data-expect-recorded browser blocks autoplay, after Reload and record
+                           (falls back to data-expect-blocked)
+    No control on this page is named pause/stop/play/mute/volume/sound, so
+    nothing is a mechanism except native controls.
+  -->
+  <h1>Audio Autoplay Defects</h1>
+  <p>
+    This page plays quiet tones automatically. Each case below is an audio
+    autoplay scenario for WCAG 1.4.2 Audio Control.
+  </p>
+
+  <div class="case defect">
+    <strong>Background audio (defect):</strong> autoplay, loop, no controls.
+    <audio id="bg" autoplay loop data-tone="6"
+      data-expect="fail" data-expect-blocked="review"></audio>
+  </div>
+
+  <p>Filler paragraph so the next case is not within the first three elements.</p>
+  <p>Another filler paragraph.</p>
+
+  <div class="case">
+    <strong>Native controls, late in the page:</strong> autoplay with controls
+    that are not within the first three elements.
+    <audio id="late-controls" autoplay loop controls data-tone="6"
+      data-expect="warn" data-expect-blocked="review"></audio>
+  </div>
+
+  <div class="case">
+    <strong>Script-started audio:</strong> no autoplay attribute; a script
+    calls play() on load. A static Run cannot tell who started it (review);
+    Reload and record can (fail when allowed, review when blocked).
+    <audio id="scripted" loop data-tone="6"
+      data-expect="review" data-expect-blocked="pass" data-expect-recorded="review"></audio>
+  </div>
+
+  <div class="case">
+    <strong>Delayed script audio:</strong> no autoplay attribute; a script
+    calls play() 1.5 seconds after load. Recorded results must not treat it
+    as user-started (the side panel's reload refresh must not leak a user
+    gesture into the page).
+    <audio id="delayed" loop data-tone="6"
+      data-expect="review" data-expect-blocked="pass" data-expect-recorded="review"></audio>
+  </div>
+
+  <div class="case defect">
+    <strong>3.5-second autoplay (defect):</strong> over the 3-second threshold,
+    no loop, no controls. It has usually ended by the time a checker runs. A
+    static Run cannot tell who started an ended clip (review); Reload and
+    record can (fail when autoplay is allowed). data-expect assumes the clip
+    has ended (the E2E run waits 5 s before checking this page).
+    <audio id="over" autoplay data-tone="3.5"
+      data-expect="review" data-expect-blocked="review" data-expect-recorded="review"></audio>
+  </div>
+
+  <div class="case">
+    <strong>Muted autoplay (pass):</strong> no sound, so 1.4.2 does not apply.
+    <audio id="muted" autoplay loop muted data-tone="6"
+      data-expect="pass" data-expect-blocked="pass"></audio>
+  </div>
+
+  <div class="case">
+    <strong>Short clip (pass):</strong> 2 seconds, under the 3-second threshold.
+    <audio id="short" autoplay data-tone="2"
+      data-expect="pass" data-expect-blocked="pass"></audio>
+  </div>
+
+  <div class="case">
+    <strong>Embedded player:</strong> requests autoplay in its URL.
+    <iframe id="embed" title="Embedded player" src="index.html?autoplay=1" allow="autoplay"
+      data-expect="review" data-expect-blocked="review"></iframe>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+
+  <script>
+    // Quiet 8 kHz, 8-bit mono sine tone as a WAV blob URL.
+    function toneUrl(seconds, freq) {
+      const rate = 8000;
+      const n = Math.round(rate * seconds);
+      const buf = new ArrayBuffer(44 + n);
+      const v = new DataView(buf);
+      const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate, true);
+      v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+      for (let i = 0; i < n; i++) v.setUint8(44 + i, 128 + Math.round(12 * Math.sin(2 * Math.PI * (freq || 440) * i / rate)));
+      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    }
+    for (const el of document.querySelectorAll('[data-tone]')) {
+      el.src = toneUrl(Number(el.dataset.tone));
+    }
+    document.getElementById('scripted').play().catch(() => {});
+    setTimeout(() => document.getElementById('delayed').play().catch(() => {}), 1500);
+  </script>
+</body>
+</html>

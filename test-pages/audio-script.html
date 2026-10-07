@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Script Audio Without Page Elements</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+  </style>
+</head>
+<body data-expect="review" data-expect-blocked="pass" data-expect-recorded="review">
+  <!--
+    WCAG 1.4.2 / Trusted Tester 2.A fixture: audio with no element in the
+    page. On load, a script starts a quiet Web Audio tone and plays a
+    new Audio() object that is never inserted into the page.
+    The expectations on <body> are for the page-level '(page)' finding:
+      autoplay allowed  → Chrome marks the tab audible → review
+      autoplay blocked  → nothing to see with a static Run → pass
+      blocked + Reload and record → the hook saw both attempts → review
+  -->
+  <h1>Script Audio Without Page Elements</h1>
+  <p>A script plays quiet tones that have no element on the page.</p>
+  <p><a href="index.html">← Back to index</a></p>
+
+  <script>
+    function toneUrl(seconds, freq) {
+      const rate = 8000;
+      const n = Math.round(rate * seconds);
+      const buf = new ArrayBuffer(44 + n);
+      const v = new DataView(buf);
+      const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate, true);
+      v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+      for (let i = 0; i < n; i++) v.setUint8(44 + i, 128 + Math.round(12 * Math.sin(2 * Math.PI * (freq || 440) * i / rate)));
+      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    }
+
+    const detached = new Audio(toneUrl(30, 330));
+    detached.loop = true;
+    detached.play().catch(() => {});
+
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.02;
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+  </script>
+</body>
+</html>

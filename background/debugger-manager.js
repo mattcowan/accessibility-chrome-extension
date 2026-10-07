@@ -188,6 +188,20 @@ export async function updateTabState(tabId, mutate) {
   return { ok: true, state };
 }
 
+// --- Page-world script injection for the audio checker's Reload and record --
+// Runs `source` in the main world of every new document (and its same-process
+// frames) before page scripts. Returns the identifier to remove it with.
+
+export async function addScriptOnNewDocument(tabId, source) {
+  await sendCommand(tabId, 'Page.enable');
+  const { identifier } = await sendCommand(tabId, 'Page.addScriptToEvaluateOnNewDocument', { source });
+  return identifier;
+}
+
+export async function removeScriptOnNewDocument(tabId, identifier) {
+  await sendCommand(tabId, 'Page.removeScriptToEvaluateOnNewDocument', { identifier });
+}
+
 // --- Input dispatch for the hover/focus-content (1.4.13) probe -------------
 // Real CDP mouse moves trigger CSS :hover, which JS-synthesized events cannot.
 

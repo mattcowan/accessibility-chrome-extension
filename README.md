@@ -29,7 +29,8 @@ keyboard-trap scanner.
 
 | Checker | WCAG | What it does |
 |---|---|---|
-| Motion respect | 2.3.3 / 2.2.2 | With reduced-motion emulated, reports animations and autoplaying media still running. The row has its own **Reduced motion** toggle (same emulation as the toggle up top) so you can flip it and re-run in place |
+| Motion respect | 2.3.3 / 2.2.2 | With reduced-motion emulated, reports animations and autoplaying video still running. The row has its own **Reduced motion** toggle (same emulation as the toggle up top) so you can flip it and re-run in place. For each autoplaying video it looks for a pause/stop/hide control (native controls, a control named pause/stop/play/hide/freeze, or one with `aria-controls` on the video) in the Trusted Tester 2.B location: the first three elements, or three elements before or after the video. Found there → `review`; found elsewhere → `warn`; not found → `fail` |
+| Audio autoplay | 1.4.2 (TT 2.A) | Reports unmuted audio longer than 3 seconds that **plays now**, or that **would play** (an autoplay element the browser's autoplay policy kept paused), plus embeds that request autoplay. Looks for a pause/stop/volume control within the first three elements (`review` if found, `warn` if elsewhere, `fail` if none). If Chrome marks the tab as audible but no page element explains it (Web Audio, cross-origin iframes), it adds a page-level `review`. **Reload and record** reloads the page with a recorder that catches audio scripts start, including attempts the browser blocked |
 | Text spacing | 1.4.12 | Applies the standard spacing overrides, then flags **newly** clipped text (pre-existing clipping is baselined out) |
 | Focus visibility | 2.4.7 | Badges tab order; flags focusables with no detectable focus indicator (style-diff + CSSOM `:focus`/`:focus-visible` analysis, confidence-graded) |
 | Target size | 2.5.8 | Flags interactive targets under 24×24 px, with the spacing and inline exceptions approximated |
@@ -53,7 +54,8 @@ sessions. Notes:
   so they can't skew other checkers (running it from its own button leaves them
   applied, as before).
 - The stateful tools (text-spacing apply/remove, accname inspector, live-regions
-  monitor) are not batchable.
+  monitor) are not batchable. Neither is audio's **Reload and record**, because it
+  reloads the page.
 
 ### Report
 
@@ -108,6 +110,20 @@ it. Consequences:
 - The hover checker only discovers CSS-rule-based reveals (`:hover`/`:focus` toggling
   display/visibility/opacity); JS-driven tooltips are not probed.
 - The accessible-name computation is a simplified subset of the AccName algorithm.
+- Audio results depend on the browser profile. Chrome lets a site autoplay with sound
+  after user interaction or when its Media Engagement Index is high, so the same page
+  can play on one profile and be blocked on another. Blocked autoplay is reported as
+  `review` ("would play"). No extension API can turn the autoplay policy off; start
+  Chrome with `--autoplay-policy=no-user-gesture-required` to test with it off.
+- Running any checker from the popup gives the page user activation (Chrome passes
+  the click's user gesture into injected scripts). After that, the page's scripts can
+  start sound that was blocked before. To see a page's first-load audio behavior, run
+  **Reload and record**. Its reload comes from the service worker, with no gesture, and
+  it waits until the click's activation expires (about 6 seconds after the click)
+  before it checks the page.
+- "First three elements" (Trusted Tester) is counted in reading order: each control,
+  media element, image with alt text, and run of text. Findings also give the
+  control's tab-stop position.
 - If you navigate the tab while the popup is closed, reopen the popup before running
   checkers (activeTab re-grant).
 
