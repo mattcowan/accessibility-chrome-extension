@@ -417,6 +417,19 @@ try {
     check('[holds] last emulation toggle off during a hover probe keeps it attached', toggled.offOk && toggled.duringHold, JSON.stringify(toggled));
     check('[holds] hover probe end then detaches (emulation all off)', !toggled.afterEnd, JSON.stringify(toggled));
 
+    // An orphaned hover hold (popup closed before 'end') lapses after 15 s
+    // with no hover message, so turning emulation off then detaches.
+    const orphan = await env.popup.evaluate(async (tabId) => {
+      const tabState = async () => ((await chrome.storage.session.get(`tab:${tabId}`))[`tab:${tabId}`] || {}).attached === true;
+      const send = (m) => chrome.runtime.sendMessage({ ...m, tabId });
+      await send({ type: 'hoverProbe', action: 'start' }); // never ended
+      await send({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: 'reduce' });
+      await new Promise((r) => setTimeout(r, 16000));
+      await send({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: null });
+      return { afterOff: await tabState() };
+    }, tabId);
+    check('[holds] orphaned hover hold lapses; emulation off then detaches', !orphan.afterOff, JSON.stringify(orphan));
+
     // The outline:none button is a 2.4.7 problem for Focus visibility, not 2.1.1.
     await clickAndWait(env, 'run-focus', /^focus-visibility: \d+ findings/);
     const fv = await storedFindings(env, tabId, 'focus-visibility');

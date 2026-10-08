@@ -904,7 +904,7 @@ function wireCheckers() {
       // Ask the page, not the button label: the popup and the side panel can
       // both be open, and the other one may have started or stopped it.
       const [status] = await callChecker('focusLocator', 'status');
-      const starting = !(status.result && status.result.active);
+      const starting = !status?.result?.active;
       await callChecker('focusLocator', starting ? 'start' : 'stop');
       e.target.textContent = starting ? 'Stop locator' : 'Start locator';
       announce(

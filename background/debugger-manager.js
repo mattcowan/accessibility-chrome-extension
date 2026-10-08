@@ -168,29 +168,71 @@ export async function detachIfIdle(tabId) {
 // neither one user's cleanup nor an emulation toggle can detach another user
 // mid-way (the popup and the side panel can both drive one tab).
 // In memory, unlike tab state: if the SW dies, the holds die with it, and the
-// worst case is the old behavior (an early detach). A hover probe whose popup
-// closed before 'end' keeps its hold until the debugger detaches or the tab
-// closes; it left the debugger attached before holds existed too.
-const debuggerHolds = new Map();
+// worst case is the old behavior (an early detach).
+//
+// Two kinds. The listener read and Reload and record run inside one SW call
+// with a finally, so their `calls` count always comes back down. The hover
+// probe spans many popup messages, and a popup that closes before 'end'
+// would orphan its hold and keep the infobar up for good; so a hover hold
+// lapses when no hover message arrived for HOVER_HOLD_STALE_MS. A running
+// probe sends one about every second.
+const HOVER_HOLD_STALE_MS = 15000;
+const debuggerHolds = new Map(); // tabId -> {calls, hovers, lastHover}
 
-export function holdDebugger(tabId) {
-  debuggerHolds.set(tabId, (debuggerHolds.get(tabId) || 0) + 1);
+function holdsFor(tabId) {
+  let h = debuggerHolds.get(tabId);
+  if (!h) {
+    h = { calls: 0, hovers: 0, lastHover: 0 };
+    debuggerHolds.set(tabId, h);
+  }
+  return h;
 }
 
-// Returns the tab state after the release (detached if this was the last
-// hold and no emulation is on).
+function hasActiveHold(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (!h) return false;
+  return h.calls > 0 || (h.hovers > 0 && Date.now() - h.lastHover < HOVER_HOLD_STALE_MS);
+}
+
+// Detach if this was the last active hold and no emulation is on. Returns the
+// tab state after it.
+async function afterRelease(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (h && h.calls <= 0 && h.hovers <= 0) debuggerHolds.delete(tabId);
+  return hasActiveHold(tabId) ? getTabState(tabId) : detachIfIdle(tabId);
+}
+
+export function holdDebugger(tabId) {
+  holdsFor(tabId).calls++;
+}
+
 export async function releaseDebugger(tabId) {
-  const left = (debuggerHolds.get(tabId) || 1) - 1;
-  if (left > 0) {
-    debuggerHolds.set(tabId, left);
-    return getTabState(tabId);
-  }
-  debuggerHolds.delete(tabId);
-  return detachIfIdle(tabId);
+  const h = holdsFor(tabId);
+  h.calls = Math.max(0, h.calls - 1);
+  return afterRelease(tabId);
+}
+
+// Hover probe: 'start' takes the hold, 'move'/'escape' keep it fresh, 'end'
+// releases it.
+export function holdHover(tabId) {
+  const h = holdsFor(tabId);
+  h.hovers++;
+  h.lastHover = Date.now();
+}
+
+export function touchHover(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (h && h.hovers > 0) h.lastHover = Date.now();
+}
+
+export async function releaseHover(tabId) {
+  const h = holdsFor(tabId);
+  h.hovers = Math.max(0, h.hovers - 1);
+  return afterRelease(tabId);
 }
 
 // Nothing is attached any more (external detach, tab closed), so no hold can
-// be honored; this also frees an orphaned hover-probe hold.
+// be honored.
 export function clearHolds(tabId) {
   debuggerHolds.delete(tabId);
 }
@@ -200,7 +242,7 @@ export async function updateTabState(tabId, mutate) {
   const state = await getTabState(tabId);
   mutate(state);
   if (isAllOff(state)) {
-    if (state.attached && debuggerHolds.has(tabId)) {
+    if (state.attached && hasActiveHold(tabId)) {
       // A hold-taker is mid-way: clear the overrides but stay attached. The
       // last releaseDebugger detaches (detachIfIdle sees all-off).
       await applyState(tabId, state).catch(() => {});

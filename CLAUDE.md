@@ -119,7 +119,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   attaches, reads, releases; refused during Reload and record; any CDP error other
   than "node gone" fails the whole read → `ok:false`), `resetTab`; Reload and record,
   `clickListeners` and the hover probe (start→end) take an in-memory per-tab
-  **debugger hold** (`holdDebugger`/`releaseDebugger` in debugger-manager.js). The
+  **debugger hold** (`holdDebugger`/`releaseDebugger` in debugger-manager.js; the
+  hover probe uses `holdHover`/`touchHover`/`releaseHover`, and its hold lapses after
+  15 s with no hover message, so a popup closed mid-probe cannot pin it). The
   debugger detaches only when no hold is left and no emulation is on: the last
   release runs `detachIfIdle`, and `updateTabState`'s all-off branch clears the
   overrides but stays attached while a hold exists; SW broadcasts
@@ -182,7 +184,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 121/121 on 2026-10-07 (58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 122/122 on 2026-10-08 (58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

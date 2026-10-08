@@ -89,8 +89,8 @@ async function handle(msg) {
   }
 }
 
-// Debugger holds (see debugger-manager.js): the hover probe, the click-listener
-// read and Reload and record each hold the session while they work.
+// Debugger holds (see debugger-manager.js) for the click-listener read and
+// Reload and record. The hover probe uses holdHover/touchHover/releaseHover.
 function holdDebugger(tabId) {
   dbg.holdDebugger(tabId);
 }
@@ -109,17 +109,20 @@ async function handleHoverProbe(msg) {
   switch (action) {
     case 'start': {
       const res = await dbg.ensureAttached(tabId);
-      if (res.ok) holdDebugger(tabId);
+      if (res.ok) dbg.holdHover(tabId);
       return res.ok ? { ok: true } : { ok: false, error: res.error };
     }
     case 'move':
+      dbg.touchHover(tabId);
       await dbg.dispatchMouseMove(tabId, msg.x, msg.y);
       return { ok: true };
     case 'escape':
+      dbg.touchHover(tabId);
       await dbg.dispatchEscape(tabId);
       return { ok: true };
     case 'end': {
-      const state = await releaseDebugger(tabId);
+      const state = await dbg.releaseHover(tabId);
+      broadcast(tabId, state);
       return { ok: true, state };
     }
     default:
