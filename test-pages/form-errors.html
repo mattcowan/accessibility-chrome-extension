@@ -28,6 +28,10 @@
     /* (c): the only sign of the error is a red border. */
     input.is-invalid { border: 2px solid #d00000; }
     .summary { border: 3px solid #b00020; padding: 0.5rem 1rem; margin-bottom: 1rem; }
+    /* (g), (h): a Bootstrap-style focus style that changes the border and
+       background colors. It is not an error sign. */
+    .bs { transition: border-color 0.15s ease-in-out, background-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out; }
+    .bs:focus { border-color: #86b7fe; background-color: #f0f6ff; outline: 0; box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25); }
   </style>
 </head>
 <body>
@@ -112,6 +116,33 @@
     </form>
   </div>
 
+  <div class="test-section">
+    <h2>(g) Enter in the field submits; focus stays in the field</h2>
+    <form id="form-g" novalidate>
+      <div class="field">
+        <label for="g-code">Promo code</label>
+        <input type="text" class="bs" id="g-code" aria-describedby="g-code-error" data-expect="review">
+        <span id="g-code-error" class="error"></span>
+      </div>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(h) A valid field that has focus when the capture ends</h2>
+    <form id="form-h" novalidate>
+      <div class="field">
+        <label for="h-company">Company</label>
+        <input type="text" class="bs" id="h-company" value="Acme" data-expect="pass">
+      </div>
+      <div class="field">
+        <label for="h-vat">VAT number</label>
+        <input type="text" id="h-vat" aria-describedby="h-vat-error" data-expect="review">
+        <span id="h-vat-error" class="error"></span>
+      </div>
+      <button type="submit" id="submit-h">Submit</button>
+    </form>
+  </div>
+
   <script>
     const empty = (id) => !document.getElementById(id).value.trim();
 
@@ -148,6 +179,19 @@
       summary.innerHTML = '<h3>There is a problem</h3><ul><li><a href="#e-name">Enter your full name</a></li></ul>';
       document.getElementById('e-summary-slot').replaceChildren(summary);
       summary.focus();
+    });
+
+    document.getElementById('form-g').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (empty('g-code')) {
+        document.getElementById('g-code').setAttribute('aria-invalid', 'true');
+        document.getElementById('g-code-error').textContent = 'Enter the promo code from your email.';
+      }
+    });
+
+    document.getElementById('form-h').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (empty('h-vat')) document.getElementById('h-vat-error').textContent = 'Enter your VAT number.';
     });
 
     // Only reached when the field is valid: the browser blocks it otherwise.

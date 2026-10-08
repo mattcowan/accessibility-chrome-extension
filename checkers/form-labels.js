@@ -3,8 +3,9 @@
 //   __a11yCheckers.formLabels() -> findings
 // 1. Radio buttons or checkboxes in one group (same name, same form) with no
 //    group label: no fieldset with a legend and no named group/radiogroup
-//    role. `fail`, or `review` when a member has aria-describedby (the
-//    question can be there).
+//    role. `fail`, or `review` when the question can be somewhere the checker
+//    cannot judge: a member's aria-describedby, table headers on every
+//    member, or a member's aria-labelledby that joins two or more elements.
 // 2. Required-cue mismatch: the label or the field's own container shows "*"
 //    or "required" but the field has no required / aria-required, or the
 //    reverse. `review`.
@@ -107,18 +108,30 @@ if (!globalThis.__a11yFormLabels) {
             .flatMap((m) => Fo.refs(m, 'aria-describedby'))
             .map(Fo.textOf)
             .filter(Boolean);
-          if (described.length) {
+          // The question can also be in places the checker cannot judge:
+          // table headers on every member (bulk-select checkboxes; TT 5.C
+          // accepts table associations), or a member name built from two or
+          // more elements (aria-labelledby="question option"). Those are
+          // `review`, not `fail` (decided 2026-10-08 after review).
+          const headers = members.map((m) => contextOf(m)).filter((c) => /header/.test(c.text));
+          const inTable = headers.length === members.length;
+          const joined = members.find((m) => Fo.refs(m, 'aria-labelledby').length >= 2);
+          const why = [];
+          if (described.length) why.push(`A member has aria-describedby (${quote(described[0])}).`);
+          if (inTable) why.push(`Every member is in a table cell with headers (first: ${headers[0].text}).`);
+          if (joined) why.push(`A member's aria-labelledby joins more than one element (${quote(A.compute(joined).name)}).`);
+          if (why.length) {
             add(
               first,
               'review',
               `${members.length} ${kind} named "${first.name}" (${options}) have no group label: no fieldset with a legend, and no role="group" or role="radiogroup" with an accessible name. ` +
-                `A member has aria-describedby (${quote(described[0])}). Check that it gives the question these options answer; if it does not, add a fieldset and legend (WCAG 1.3.1, TT 5.C).`
+                `${why.join(' ')} Check that this gives the question these options answer; if it does not, add a fieldset and legend (WCAG 1.3.1, TT 5.C).`
             );
           } else {
             add(
               first,
               'fail',
-              `${members.length} ${kind} named "${first.name}" (${options}) have no group label: no fieldset with a legend, no role="group" or role="radiogroup" with an accessible name, and no aria-describedby on the members. ` +
+              `${members.length} ${kind} named "${first.name}" (${options}) have no group label: no fieldset with a legend, no role="group" or role="radiogroup" with an accessible name, no aria-describedby on the members, no table headers, and no aria-labelledby that joins more than one element. ` +
                 'A screen reader user hears each option but not the question. WCAG 1.3.1 (TT 5.C) needs the options tied to their question: add a fieldset and legend, or a named group role.'
             );
           }

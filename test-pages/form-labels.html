@@ -136,6 +136,30 @@
   </div>
 
   <div class="test-section">
+    <h2>(l) Bulk-select checkboxes in a data table (no group label, row headers)</h2>
+    <form>
+      <table>
+        <thead>
+          <tr><th scope="col">Select</th><th scope="col">Order</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><input type="checkbox" name="orders" id="order-1001" value="1001" aria-label="Select" data-expect="review"></td><th scope="row">Order 1001</th></tr>
+          <tr><td><input type="checkbox" name="orders" value="1002" aria-label="Select"></td><th scope="row">Order 1002</th></tr>
+        </tbody>
+      </table>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(m) Radio buttons whose aria-labelledby joins the question and the option</h2>
+    <form>
+      <p id="pay-q">How do you want to pay?</p>
+      <input type="radio" name="pay" id="pay-card" value="card" aria-labelledby="pay-q pay-card-l" data-expect="review"><span id="pay-card-l">Card</span>
+      <input type="radio" name="pay" id="pay-invoice" value="invoice" aria-labelledby="pay-q pay-invoice-l"><span id="pay-invoice-l">Invoice</span>
+    </form>
+  </div>
+
+  <div class="test-section">
     <h2>(k) A plain labeled field</h2>
     <form>
       <label for="city">City</label>

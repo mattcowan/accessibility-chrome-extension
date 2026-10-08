@@ -610,6 +610,8 @@ try {
     check('[form-labels] repeated "Quantity": row and column headers listed for each field', /"Widget A"/.test(qty) && /"Widget B"/.test(qty) && /column header "Quantity"/.test(qty) && !/Nothing tells/.test(qty), qty);
     check('[form-labels] table with no th: the finding says nothing tells the fields apart', /Nothing tells/.test(det('#qty-plain-a')), det('#qty-plain-a'));
     check('[form-labels] group with aria-describedby quotes the description', /Do you want the newsletter/.test(det('#newsletter-yes')), det('#newsletter-yes'));
+    check('[form-labels] bulk-select checkboxes with row headers: review, headers named', /Every member is in a table cell with headers/.test(det('#order-1001')), det('#order-1001'));
+    check('[form-labels] aria-labelledby that joins the question: review, name quoted', /joins more than one element \("How do you want to pay\? Card"\)/.test(det('#pay-card')), det('#pay-card'));
     check('[form-labels] every finding is 1.3.1', f.length > 0 && f.every((x) => x.wcag === '1.3.1'), JSON.stringify(f.map((x) => x.wcag)));
   }
   {
@@ -630,11 +632,23 @@ try {
   {
     const { page, tabId } = await openFixture(env, 'form-errors.html', 500);
     await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    // (h)'s valid field has focus at Start, so its first baseline is its
+    // focus style (the capture replaces it when the field loses focus).
+    await page.focus('#h-company');
     await clickAndWait(env, 'toggle-error-capture', /^error capture: on/);
     const captures = () => page.evaluate(() => Number(document.documentElement.dataset.a11yErrorCaptures || 0));
-    for (const id of ['submit-a', 'submit-b', 'submit-c', 'submit-d', 'submit-e', 'submit-f']) {
+    const enterIn = (sel) => async () => {
+      await page.click(sel);
+      await page.keyboard.press('Enter');
+    };
+    const steps = [
+      ...['submit-a', 'submit-b', 'submit-c', 'submit-d', 'submit-e', 'submit-f'].map((id) => [id, () => page.click(`#${id}`)]),
+      ['Enter in #g-code', enterIn('#g-code')],
+      ['Enter in #h-company', enterIn('#h-company')],
+    ];
+    for (const [id, act] of steps) {
       const before = await captures();
-      await page.click(`#${id}`);
+      await act();
       const done = await page
         .waitForFunction((n) => Number(document.documentElement.dataset.a11yErrorCaptures || 0) > n, before, { timeout: 8000 })
         .then(() => true, () => false);
@@ -655,6 +669,9 @@ try {
     check('[error-capture] (d) type="button" script form: role="alert" announcement found', /Announced: "Phone number is required\." \(role="alert"\)/.test(det('#d-phone')), det('#d-phone'));
     check('[error-capture] (e) error summary link and the focus move to it', /"Enter your full name" \(in an error summary link\)/.test(det('#e-name')) && /Focus moved to #e-summary/.test(det('#e-name')), det('#e-name'));
     check('[error-capture] (f) browser validation (invalid event) recorded', /Browser validation message: "/.test(det('#f-zip')) && /Focus moved to the field/.test(det('#f-zip')), det('#f-zip'));
+    const g = det('#g-code');
+    check('[error-capture] (g) Enter in the field: focus that stays is not a focus move', /"Enter the promo code from your email."/.test(g) && !/Focus moved/.test(g) && /Cues missing:[^]*an announcement/.test(g), g);
+    check('[error-capture] (g) a focus style is not counted as an error color', !/a color change/.test(g), g);
     check('[error-capture] every finding is 3.3.1', f.length > 0 && f.every((x) => x.wcag === '3.3.1'), JSON.stringify(f.map((x) => x.wcag)));
 
     // The popup re-syncs its label from the page.
@@ -702,6 +719,15 @@ try {
     await settle();
     await page.selectOption('#sort', 'price'); // (g)
     await settle();
+    await page.click('#instock'); // (j) the page then runs filterButton.click()
+    await settle();
+    // (i) ArrowDown on a closed select changes its value; the page then
+    // moves focus. Arrow keys outside a radio group are not a user focus move.
+    // A label click focuses the select like a tester would (page.focus() is
+    // a script focus, which the watcher rightly logs) and leaves it closed.
+    await page.click('label[for="units"]');
+    await page.keyboard.press('ArrowDown');
+    await settle();
     const opened = env.ctx.waitForEvent('page', { timeout: 5000 }).catch(() => null);
     await page.click('#newwin'); // (b)
     const newTab = await opened;
@@ -732,9 +758,11 @@ try {
     check('[input-watcher] (c) script focus move logged', /A script moved focus to #phone-rest/.test(one('#phone-area', '3.2.2').details), one('#phone-area', '3.2.2').details);
     check('[input-watcher] (d) content shown, not announced', /shown or added at #other-address/.test(one('#ship-other', '4.1.2').details) && /no live region changed/.test(one('#ship-other', '4.1.2').details), one('#ship-other', '4.1.2').details);
     check('[input-watcher] (e) content shown and announced', /shown or added at #gift-fields/.test(one('#gift-yes', '4.1.2').details) && /live region changed to "A gift message field was added below\."/.test(one('#gift-yes', '4.1.2').details), one('#gift-yes', '4.1.2').details);
+    check('[input-watcher] (i) ArrowDown on a select, then a script focus move, is logged', /A script moved focus to #height/.test(one('#units', '3.2.2').details), one('#units', '3.2.2').details);
+    check('[input-watcher] (j) a script click on the submit button is not a user action: submit logged', /A form was submitted/.test(one('#instock', '3.2.2').details), one('#instock', '3.2.2').details);
     check('[input-watcher] (g) form submit on change logged', /A form was submitted/.test(one('#sort', '3.2.2').details), one('#sort', '3.2.2').details);
     check('[input-watcher] a Tab press is not logged as a script focus move', !f.some((x) => /#after-plain/.test(x.details)), JSON.stringify(f.map((x) => x.details)));
-    check('[input-watcher] the radio click focus is not logged as a script move', !/A script moved focus/.test(one('#ship-other', '3.2.2').details + one('#gift-yes', '3.2.2').details));
+    check('[input-watcher] the radio click focus is not logged as a script move', !/A script moved focus/.test(one('#ship-other', '3.2.2').details + one('#gift-yes', '3.2.2').details), one('#ship-other', '3.2.2').details + ' | ' + one('#gift-yes', '3.2.2').details);
     check('[input-watcher] every finding is review', f.length > 0 && f.every((x) => x.severity === 'review'));
     const dbgState = await env.popup.evaluate(async (k) => (await chrome.storage.session.get(k))[k] || null, `tab:${tabId}`);
     check('[input-watcher] the debugger was never attached', !dbgState || !dbgState.attached, JSON.stringify(dbgState));
@@ -743,12 +771,45 @@ try {
     const label = await env.popup.evaluate(() => document.getElementById('toggle-input-watcher').textContent);
     check('[input-watcher] popup offers to resume after the navigation', label === 'Resume watcher', label);
     await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on, continuing a log/);
+
+    // Type, Tab, then Space on the submit button: the user's own submit. The
+    // navigation must not be logged against the field (Space fires click,
+    // never pointerdown).
+    await page.click('#search');
+    await page.keyboard.type('abc', { delay: 40 });
+    await page.keyboard.press('Tab');
+    await Promise.all([page.waitForURL(/q=abc/), page.keyboard.press('Space')]);
+    await page.waitForLoadState('load');
+    await sleep(800);
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.getElementById('toggle-input-watcher').textContent === 'Resume watcher', null, { timeout: 5000 }).catch(() => {});
+    await sleep(800);
+    const f2 = await storedFindings(env, tabId, 'input-watcher');
+    check('[input-watcher] Tab then Space on a submit button: no finding on the field', !f2.some((x) => x.selector === '#search'), JSON.stringify(f2.filter((x) => x.selector === '#search').map((x) => x.details)));
+    check('[input-watcher] the log continued across both navigations', f2.length === f.length, `${f2.length} vs ${f.length}`);
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on, continuing a log/);
+
+    // Stop less than 1 s after a change: the open window's effect still
+    // reaches the final log (a second identical content change on the field).
+    // The Stop click goes through evaluate(): Playwright's click on the
+    // background popup tab can take longer than the 1 s window.
+    await page.click('#ship-other');
+    await env.popup.evaluate(() => {
+      document.getElementById('status').textContent = '';
+      document.getElementById('toggle-input-watcher').click();
+    });
+    await env.popup.waitForFunction(() => /^input watcher: off/.test(document.getElementById('status').textContent));
+    const f3 = await storedFindings(env, tabId, 'input-watcher');
+    const ship = (f3.find((x) => x.selector === '#ship-other' && x.wcag === '4.1.2') || {}).details || '';
+    check('[input-watcher] Stop right after a change keeps the effect of the open window', /#other-address[^]*\(2 times\)/.test(ship), ship);
+    // Start again to test that Stop removes everything.
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on/);
     // Stop removes everything the watcher added, and its SW log; the findings stay.
     await clickAndWait(env, 'toggle-input-watcher', /^input watcher: off/);
     const marker = await page.evaluate(() => document.documentElement.hasAttribute('data-a11y-input-watcher'));
     const log = await env.popup.evaluate(async (k) => (await chrome.storage.session.get(k))[k] || null, `watch:${tabId}`);
     check('[input-watcher] Stop removes the page marker and the SW log', !marker && !log, JSON.stringify({ marker, log }));
-    check('[input-watcher] findings stay after Stop', (await storedFindings(env, tabId, 'input-watcher')).length === f.length);
+    check('[input-watcher] findings stay after Stop', (await storedFindings(env, tabId, 'input-watcher')).length === f3.length);
     await page.close();
   }
   await env.ctx.close();

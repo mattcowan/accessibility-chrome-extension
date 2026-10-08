@@ -99,7 +99,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   container and the visible text near it. Shared by the three TT section 5 tools.
 - `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
   batchable) — group with no group label is `fail`, `review` when a member has
-  aria-describedby (decided 2026-10-08); required-cue mismatch and repeated names are
+  aria-describedby, every member has table headers (bulk select), or a member's
+  aria-labelledby joins 2+ elements (decided 2026-10-08, the last two after the PR
+  review); required-cue mismatch and repeated names are
   `review`. One element can hit several rules, and the fingerprint is
   `tool|wcag|selector`, so results are merged per element into ONE finding (max
   severity, details joined). Repeated names: one finding per set, on its first field,
@@ -107,9 +109,19 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - `checkers/error-capture.js` (3.3.1 / TT 5.F; quotes text for 3.3.3 / TT 5.G) —
   stateful toggle (`start|stop|status|collect`, marker
   `data-a11y-error-capture`, plus `data-a11y-error-captures=<n>` for E2E), top frame
-  only, watch-only. Baseline per field at start (the focused field is skipped — its
-  focus style would become its "normal"); a click on a button, Enter in a field,
-  `submit` or `invalid` opens a window that closes when the DOM is quiet. A field
+  only, watch-only. Baseline per field at start; every snapshot records `focused`
+  (= `document.hasFocus()` AND deep active element — verified 2026-10-08: while the
+  tester is in the popup/panel the field keeps activeElement but `:focus` stops
+  matching) and `settling` (a CSSTransition running on the field), and colors are
+  compared only between snapshots with the SAME focus state and no transition (the
+  baseline, else the window-open snapshot) — a focus style can change border and
+  background (Bootstrap), not just outline/shadow, and a 0.15 s fade snapshot is
+  neither look. A focused baseline is replaced on
+  focusout (no window open) or at the next window open (the capture listener runs
+  before the page's handlers, so that snapshot is still pre-submit). The focus cue
+  counts only a focusin INSIDE the window: Enter in a field leaves focus where it
+  was, which is not a move. A click on a button (any input device), Enter in a
+  field, `submit` or `invalid` opens a window that closes when the DOM is quiet. A field
   keeps its earlier result unless the new window changed it (otherwise submitting
   form B would erase form A's announcement cue). Color-only (no text) = `warn`, all
   else `review`. Results live page-side; after each window the page posts
@@ -119,17 +131,24 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   marker `data-a11y-input-watcher`, top frame only, watch-only, never attaches the
   debugger (no listener read). A navigation ends the page script, so the LOG LIVES IN
   THE SW's `chrome.storage.session` key `watch:${tabId}`
-  (`{active, startedAt, last, events}`): the page sends `inputWatch` `mark` on each
-  field input/change, `unmark` on a click elsewhere or Enter, and `event` for what it
-  sees itself (script focus move = focusin with no Tab/arrow key in 150 ms and not the
-  clicked element or its label's control; content shown = not rendered at the
+  (`{active, startedAt, last, events, seq}` — `seq` counts every event ever logged
+  and keeps growing at the 300-event cap; listeners watch it, not the length): the
+  page sends `inputWatch` `mark` on each field input/change, `unmark` on a press or
+  `click` on a non-field (click also covers Enter/Space on a button, which never
+  fires pointerdown) or Enter — TRUSTED events only: a change handler's
+  `submitBtn.click()` is the 3.2.2 case, not a user action — and `event` for what it sees itself (script focus
+  move = focusin with no Tab in 150 ms — arrow-type keys count only in a radio group
+  or roving-focus widget, since on a closed `<select>` ArrowDown changes the value —
+  and not the clicked element or its label's control; content shown = not rendered at the
   field's focusin, rendered at window end; submit with no Enter/submit click). The SW
   logs `navigation` (`tabs.onUpdated` loading) and `new-tab` (`tabs.onCreated`
   `openerTabId`) within 5 s of a mark, serialized per tab. The popup turns the log
   into findings (`syncWatchFindings`: one per field per criterion) on refresh, on
-  start/stop and on each `watch:` events-count change, MERGED with the report's
+  start/stop and on each `watch:` `seq` change, MERGED with the report's
   existing input-watcher findings, and each finding carries the url of the page the
-  field was on. Stop clears the log; after a navigation the button reads "Resume
+  field was on. Stop: the page returns its open window's events (a post could arrive
+  after the stop), the popup sends them with `inputWatch stop`, and the SW logs them,
+  returns the final log for the last sync, then clears it. After a navigation the button reads "Resume
   watcher" and starting again continues the log.
 - `test-pages/*.html` — deliberate-defect fixtures. Every defect element carries a
   `data-expect="fail|warn|review|pass"` attribute; the E2E verify script asserts
@@ -231,7 +250,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 186/186 on 2026-10-08 (123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 205/205 on 2026-10-08 (123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

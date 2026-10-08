@@ -101,6 +101,34 @@
     </form>
   </div>
 
+  <div class="test-section">
+    <h2>(h) A search field, then Tab and Space on its submit button</h2>
+    <form id="search-form" action="form-input.html">
+      <label for="search">Search</label>
+      <input type="text" id="search" name="q" data-expect="pass">
+      <button type="submit" id="search-go">Search</button>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(i) A select that moves focus when an arrow key changes it</h2>
+    <label for="units">Units</label>
+    <select id="units" data-expect="review">
+      <option value="metric">Metric</option>
+      <option value="imperial">Imperial</option>
+    </select>
+    <label for="height">Height</label>
+    <input type="text" id="height">
+  </div>
+
+  <div class="test-section">
+    <h2>(j) A checkbox whose change handler clicks the submit button</h2>
+    <form id="filter-form">
+      <label><input type="checkbox" id="instock" data-expect="review"> In stock only</label>
+      <button type="submit" id="filter-go">Filter</button>
+    </form>
+  </div>
+
   <script>
     const params = new URLSearchParams(location.search);
     if (params.get('country')) document.getElementById('country').value = params.get('country');
@@ -130,6 +158,12 @@
         document.getElementById('gift-status').textContent = yes ? 'A gift message field was added below.' : '';
       });
     }
+
+    document.getElementById('units').addEventListener('change', () => document.getElementById('height').focus());
+
+    // A script click (untrusted), not the user's.
+    document.getElementById('instock').addEventListener('change', () => document.getElementById('filter-go').click());
+    document.getElementById('filter-form').addEventListener('submit', (e) => e.preventDefault());
 
     const sortForm = document.getElementById('sort-form');
     document.getElementById('sort').addEventListener('change', () => sortForm.requestSubmit());

@@ -571,10 +571,13 @@ function watchFindings(events) {
 // Merge the log into this report. Findings already in the report stay (a
 // restarted watcher starts a new log), and a field's finding from the log
 // replaces its older one.
-async function syncWatchFindings() {
+// state: the log to use (Stop passes the final one); else read from storage.
+async function syncWatchFindings(state) {
   if (!tab || restricted) return;
-  const key = `watch:${tab.id}`;
-  const state = (await chrome.storage.session.get(key))[key];
+  if (state === undefined) {
+    const key = `watch:${tab.id}`;
+    state = (await chrome.storage.session.get(key))[key];
+  }
   if (!state || !state.events || !state.events.length) return;
   const derived = watchFindings(state.events);
   const store = await getStore();
@@ -917,20 +920,19 @@ async function refreshErrorCaptureButton() {
 // "Resume" when the SW still holds an active log but the page script is gone
 // (the page navigated): starting again continues the same log.
 async function refreshInputWatcherButton() {
+  const key = `watch:${tab.id}`;
+  const sw = (await chrome.storage.session.get(key))[key];
+  const idle = sw && sw.active ? 'Resume watcher' : 'Start watcher';
   try {
-    const key = `watch:${tab.id}`;
-    const sw = (await chrome.storage.session.get(key))[key];
     const [res] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => document.documentElement.dataset.a11yInputWatcher === 'on',
     });
-    $('toggle-input-watcher').textContent = res.result
-      ? 'Stop watcher'
-      : sw && sw.active
-        ? 'Resume watcher'
-        : 'Start watcher';
+    $('toggle-input-watcher').textContent = res.result ? 'Stop watcher' : idle;
   } catch {
-    // leave default label
+    // No access to the page (side panel after a tab switch): the SW log still
+    // says whether a session is open, so the label never keeps another tab's.
+    $('toggle-input-watcher').textContent = idle;
   }
 }
 
@@ -1114,9 +1116,11 @@ function wireCheckers() {
         );
         await syncWatchFindings();
       } else {
-        await callChecker('inputWatcher', 'stop');
-        await syncWatchFindings();
-        await send({ type: 'inputWatch', action: 'stop' });
+        // The page's open window (a change less than 1 s ago) goes to the SW
+        // with the stop message, so it is in the final log.
+        const [res] = await callChecker('inputWatcher', 'stop');
+        const sw = await send({ type: 'inputWatch', action: 'stop', events: (res.result && res.result.events) || [] });
+        await syncWatchFindings(sw && sw.ok ? sw.state : undefined);
         e.target.textContent = 'Start watcher';
         announce('input watcher: off. Its findings stay in the report.');
       }
@@ -1384,12 +1388,13 @@ async function init() {
 
   // The Input watcher's log grows in session storage (SW-written); fold each
   // new entry into the report while this popup or panel is open. Marks
-  // (one per keystroke) change `last`, not `events`, and are skipped.
+  // (one per keystroke) change `last`, not `seq`, and are skipped.
   chrome.storage.session.onChanged.addListener((changes) => {
     const c = tab && changes[`watch:${tab.id}`];
     if (!c || restricted) return;
-    const count = (v) => (v && v.events ? v.events.length : 0);
-    if (count(c.newValue) && count(c.newValue) !== count(c.oldValue)) syncWatchFindings().catch(() => {});
+    // seq, not the length: the log is capped, so its length stops changing.
+    const seq = (v) => (v && v.seq) || 0;
+    if (seq(c.newValue) && seq(c.newValue) !== seq(c.oldValue)) syncWatchFindings().catch(() => {});
   });
 
   if (IS_PANEL) {

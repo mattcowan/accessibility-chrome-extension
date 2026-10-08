@@ -41,7 +41,7 @@ if (!globalThis.__a11yErrorCapture) {
     const FIELD_CAP = 1000;
     const TRIGGER_SELECTOR =
       'button, input[type="submit"], input[type="image"], input[type="button"], [role="button"]';
-    const FOCUS_ONLY = new Set(['outlineStyle', 'outlineWidth', 'outlineColor', 'boxShadow']);
+    const REBASE_MS = 400; // after focusout, let focus transitions settle first
     const PROP_NAMES = {
       outlineStyle: 'outline',
       outlineWidth: 'outline',
@@ -62,6 +62,7 @@ if (!globalThis.__a11yErrorCapture) {
     let win = null; // open capture window
     let observer = null;
     let captures = 0;
+    let timers = new Set();
 
     const quote = (s, n = 120) => `"${s.length > n ? `${s.slice(0, n - 3)}...` : s}"`;
     const shown = (el) =>
@@ -97,6 +98,14 @@ if (!globalThis.__a11yErrorCapture) {
       return out;
     }
 
+    function transitioning(el) {
+      try {
+        return el.getAnimations().some((a) => a instanceof CSSTransition && a.playState === 'running');
+      } catch {
+        return false;
+      }
+    }
+
     function snapField(el) {
       const invalid = (el.getAttribute('aria-invalid') || '').toLowerCase();
       let colors = null;
@@ -112,6 +121,15 @@ if (!globalThis.__a11yErrorCapture) {
         links: summaryLinks(el),
         colors,
         labelColor: el.labels && el.labels[0] ? S.styleOf(el.labels[0]).color : null,
+        // A focus style can change any color (Bootstrap changes the border and
+        // background), so colors are compared only between two snapshots
+        // with the same focus state. While the page itself has no focus (the
+        // tester is in the popup or side panel), the field keeps
+        // activeElement but :focus stops matching, so it is not "focused".
+        focused: document.hasFocus() && S.deepActiveElement(document) === el,
+        // Mid-transition colors (a 0.15 s focus or blur fade, as Bootstrap
+        // has) are neither look; such a snapshot is never compared.
+        settling: transitioning(el),
       };
     }
 
@@ -147,8 +165,14 @@ if (!globalThis.__a11yErrorCapture) {
       for (const el of fields()) {
         const snap = snapField(el);
         pre.set(el, snap);
+        // The capture listener runs before the page's handlers, so this is
+        // still the field before the submit: an unfocused look for a field
+        // whose baseline was taken while it had focus.
         if (!baselines.has(el)) baselines.set(el, snap);
+        else rebase(el, snap, true);
       }
+      // focus: the last focusin inside the window. Focus that stays where it
+      // was (Enter in a field) is not a move.
       win = { start: now, lastMutation: now, pre, regions: new Set(), invalid: new Map(), focus: null, timer: 0 };
       win.timer = setInterval(maybeClose, TICK_MS);
     }
@@ -187,13 +211,39 @@ if (!globalThis.__a11yErrorCapture) {
       if (win) win.focus = e.composedPath()[0];
     }
 
+    // A field whose baseline was taken while it had focus, or mid-transition,
+    // gets a settled unfocused one once it loses focus, if no capture is open
+    // and it shows no error yet.
+    function onFocusOut(e) {
+      const el = e.composedPath()[0];
+      if (!Fo.isField(el)) return;
+      const t = setTimeout(() => {
+        timers.delete(t);
+        rebase(el);
+      }, REBASE_MS);
+      timers.add(t);
+    }
+
+    function rebase(el, snap, opening) {
+      const base = baselines.get(el);
+      if (!active || (win && !opening) || !base || !(base.focused || base.settling) || results.has(el) || !el.isConnected) return;
+      const now = snap || snapField(el);
+      if (!now.focused && !now.settling) baselines.set(el, now);
+    }
+
     // ------------------------------------------------------------- verdict
 
-    function colorChanges(base, now, focused) {
+    // Compared with the baseline, or else with the snapshot taken when the
+    // window opened, whichever has the same focus state as now and was not
+    // taken mid-transition. null when neither qualifies, or when now is
+    // mid-transition (not compared).
+    function colorChanges(base, pre, now) {
+      if (now.settling) return null;
+      base = [base, pre].find((r) => r && !r.settling && r.focused === now.focused);
+      if (!base) return null;
       const out = new Set();
       if (base.colors && now.colors) {
         for (const p of S.SNAP_PROPS) {
-          if (focused && FOCUS_ONLY.has(p)) continue;
           if (base.colors[p] !== now.colors[p]) out.add(PROP_NAMES[p]);
         }
       }
@@ -216,8 +266,8 @@ if (!globalThis.__a11yErrorCapture) {
       }
       const native = ctx.invalid.get(el) || '';
       const invalid = now.invalid === 'true' && base.invalid !== 'true';
-      const focused = S.deepActiveElement(document) === el;
-      const colors = colorChanges(base, now, focused);
+      const compared = colorChanges(base, ctx.pre.get(el), now);
+      const colors = compared || [];
       if (!texts.length && !native && !invalid && !colors.length) return null;
 
       // Announcement: a live region that changed in the window and holds this
@@ -254,7 +304,7 @@ if (!globalThis.__a11yErrorCapture) {
       (tiedText ? found : missing).push('text tied to the field (aria-describedby or aria-errormessage)');
       (now.invalid === 'true' ? found : missing).push('aria-invalid="true"');
       (announced || focusCue ? found : missing).push('an announcement (live region or role="alert") or a focus move to the error');
-      if (colors.length) found.push(`a color change (${colors.join(', ')}${focused ? '; the field has focus, so outline and shadow are not compared' : ''})`);
+      if (colors.length) found.push(`a color change (${colors.join(', ')})`);
 
       const parts = ['After a submit, this field shows an error.'];
       if (anyText) parts.push(`Error text: ${texts.map((t) => `${quote(t.text)} (${t.how})`).join('; ')}.`);
@@ -269,6 +319,7 @@ if (!globalThis.__a11yErrorCapture) {
       }
       if (announced) parts.push(`Announced: ${announced}.`);
       if (focusCue) parts.push(focusCue);
+      if (!compared) parts.push('Colors were not compared: no earlier snapshot of the field had the same focus state with no color transition running, and focus styles change colors too.');
       parts.push(`Cues found: ${found.join('; ') || 'none'}. Cues missing: ${missing.join('; ') || 'none'}.`);
 
       const colorOnly = !anyText && !native && colors.length > 0;
@@ -290,8 +341,7 @@ if (!globalThis.__a11yErrorCapture) {
       const ctx = win;
       win = null;
       clearInterval(ctx.timer);
-      const now = S.deepActiveElement(document);
-      ctx.focusEl = now && now !== document.body ? now : ctx.focus;
+      ctx.focusEl = ctx.focus;
       for (const el of fields()) {
         const post = snapField(el);
         const pre = ctx.pre.get(el);
@@ -325,10 +375,9 @@ if (!globalThis.__a11yErrorCapture) {
     function start() {
       if (active) return { active: true, fields: baselines.size };
       active = true;
-      // The focused field would record its focus style as its normal look;
-      // it gets its baseline when the first capture window opens instead.
-      const focused = S.deepActiveElement(document);
-      for (const el of fields()) if (el !== focused) baselines.set(el, snapField(el));
+      // The field that has focus records its focus style; its snapshot says
+      // so (focused), and it is replaced when the field loses focus.
+      for (const el of fields()) baselines.set(el, snapField(el));
       observer = new MutationObserver(onMutations);
       observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true });
       document.addEventListener('click', onClick, true);
@@ -336,6 +385,7 @@ if (!globalThis.__a11yErrorCapture) {
       document.addEventListener('submit', onSubmit, true);
       document.addEventListener('invalid', onInvalid, true);
       document.addEventListener('focusin', onFocusIn, true);
+      document.addEventListener('focusout', onFocusOut, true);
       document.documentElement.dataset.a11yErrorCapture = 'on';
       document.documentElement.dataset.a11yErrorCaptures = '0';
       return { active: true, fields: baselines.size };
@@ -353,6 +403,9 @@ if (!globalThis.__a11yErrorCapture) {
       document.removeEventListener('submit', onSubmit, true);
       document.removeEventListener('invalid', onInvalid, true);
       document.removeEventListener('focusin', onFocusIn, true);
+      document.removeEventListener('focusout', onFocusOut, true);
+      for (const t of timers) clearTimeout(t);
+      timers = new Set();
       baselines = new Map();
       results = new Map();
       captures = 0;

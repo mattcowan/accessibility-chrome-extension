@@ -217,7 +217,9 @@ async function recordAudioCycle(tabId) {
 
 // Input watcher (3.2.2 / 4.1.2, TT 5.D / 5.E). A navigation ends the page
 // script, so the watcher's log lives here, in chrome.storage.session under
-// `watch:${tabId}` (never in SW memory): {active, startedAt, last, events}.
+// `watch:${tabId}` (never in SW memory): {active, startedAt, last, events, seq}.
+// seq counts every event ever logged; it keeps growing after the events list
+// hits its cap, so a listener can still see that something was added.
 // The page marks each field change; a navigation or a new tab within
 // WATCH_MARK_MS of the mark is logged against that field. The popup turns the
 // log into findings. The watcher never attaches the debugger.
@@ -251,7 +253,11 @@ function updateWatch(tabId, fn) {
 }
 
 function logWatchEvent(state, event) {
-  return { ...state, events: [...state.events, { ...event, at: Date.now() }].slice(-WATCH_EVENT_CAP) };
+  return {
+    ...state,
+    events: [...state.events, { ...event, at: Date.now() }].slice(-WATCH_EVENT_CAP),
+    seq: (state.seq || 0) + 1,
+  };
 }
 
 async function handleInputWatch(msg, sender) {
@@ -279,9 +285,16 @@ async function handleInputWatch(msg, sender) {
       );
       return { ok: true, state };
     }
-    case 'stop':
-      await updateWatch(tabId, () => null);
-      return { ok: true };
+    case 'stop': {
+      // The page hands over what its open window saw (msg.events); log it,
+      // return the final log for the popup, then remove it.
+      let final = null;
+      await updateWatch(tabId, (s) => {
+        final = s && s.active ? (msg.events || []).reduce(logWatchEvent, s) : s;
+        return null;
+      });
+      return { ok: true, state: final };
+    }
     case 'status':
       return { ok: true, state: await updateWatch(tabId, () => undefined) };
     default:

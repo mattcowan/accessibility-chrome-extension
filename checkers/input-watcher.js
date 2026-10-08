@@ -2,7 +2,8 @@
 // the tester changes form fields by hand, log what each field's `input`,
 // `change` or blur caused.
 //   __a11yCheckers.inputWatcher('start')  -> {active:true}
-//   __a11yCheckers.inputWatcher('stop')   -> {active:false}  (removes everything)
+//   __a11yCheckers.inputWatcher('stop')   -> {active:false, events}  (removes
+//       everything; events = what an open window saw, for the SW's log)
 //   __a11yCheckers.inputWatcher('status') -> {active}
 // Needs selector.js, findings.js, accname.js, lib/forms.js and lib/live.js.
 // Top frame only.
@@ -39,8 +40,13 @@ if (!globalThis.__a11yInputWatcher) {
     const USER_MS = 150; // a focus move this soon after a Tab key or a click is the user's
     const MARK_MS = 5000; // same as the SW's navigation window
     const HIDDEN_CAP = 5000;
-    // Keys whose default action moves focus (radio groups move with arrows).
-    const NAV_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+    // Tab always moves focus. Arrow-type keys move it only in a radio group
+    // or a roving-focus widget; on a closed <select> they change the value,
+    // so a focus move after them is the page's (the textbook TT 5.D case).
+    const ARROW_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+    const ROVING_SELECTOR =
+      'input[type="radio"], [role="radio"], [role="radiogroup"], [role="tablist"], [role="menu"], [role="menubar"], ' +
+      '[role="listbox"], [role="grid"], [role="tree"], [role="treegrid"], [role="toolbar"]';
     const SUBMIT_SELECTOR = 'button:not([type="button"]):not([type="reset"]), input[type="submit"], input[type="image"]';
 
     let active = false;
@@ -51,7 +57,7 @@ if (!globalThis.__a11yInputWatcher) {
     let lastKeyNav = 0;
     let lastPointer = 0;
     let pointerTarget = null;
-    let lastExplicit = 0; // Enter or a click on a submit button
+    let lastExplicit = 0; // Enter, or a click (any input device) on a submit button
     let markAt = 0;
 
     const now = () => performance.now();
@@ -119,7 +125,9 @@ if (!globalThis.__a11yInputWatcher) {
       win.timer = setTimeout(closeWindow, wait);
     }
 
-    function closeWindow() {
+    // emit: where the effects go — the SW by default; Stop collects them
+    // instead, so they reach the log before the log is closed.
+    function closeWindow(emit = (event) => post({ action: 'event', event })) {
       const w = win;
       win = null;
       if (!w) return;
@@ -133,9 +141,9 @@ if (!globalThis.__a11yInputWatcher) {
       const cause = [...w.kinds].join('/');
 
       for (const target of w.focusMoves) {
-        post({ action: 'event', event: { kind: 'focus', cause, field, target: describe(target) } });
+        emit({ kind: 'focus', cause, field, target: describe(target) });
       }
-      if (w.submitted) post({ action: 'event', event: { kind: 'submit', cause, field } });
+      if (w.submitted) emit({ kind: 'submit', cause, field });
 
       const shown = outermost(
         [...hidden.filter((el) => el.isConnected && Fo.rendered(el)), ...w.added.filter((el) => el.isConnected && Fo.rendered(el))].filter(
@@ -147,16 +155,13 @@ if (!globalThis.__a11yInputWatcher) {
       const announced = [...w.regions].map((r) => Fo.textOf(r)).filter(Boolean).slice(0, 3);
       for (const el of shown.slice(0, 5)) {
         const focusIn = w.focusMoves.some((t) => el.contains(t)) || el.contains(document.activeElement);
-        post({
-          action: 'event',
-          event: {
-            kind: 'content',
-            cause,
-            field,
-            target: { ...describe(el), text: Fo.textOf(el).slice(0, 120) },
-            focusMoved: focusIn,
-            announced,
-          },
+        emit({
+          kind: 'content',
+          cause,
+          field,
+          target: { ...describe(el), text: Fo.textOf(el).slice(0, 120) },
+          focusMoved: focusIn,
+          announced,
         });
       }
       snapshotHidden();
@@ -164,8 +169,13 @@ if (!globalThis.__a11yInputWatcher) {
 
     // -------------------------------------------------------------- events
 
+    // Only trusted events are the user's: a page script's el.click() or a
+    // dispatched key event must not take the blame off the field (a change
+    // handler that clicks the submit button is the 3.2.2 case itself).
     function onKeydown(e) {
-      if (NAV_KEYS.has(e.key)) lastKeyNav = now();
+      if (!e.isTrusted) return;
+      const t = pathTarget(e);
+      if (e.key === 'Tab' || (ARROW_KEYS.has(e.key) && t && t.closest(ROVING_SELECTOR))) lastKeyNav = now();
       if (e.key === 'Enter') {
         lastExplicit = now();
         unmark();
@@ -180,14 +190,26 @@ if (!globalThis.__a11yInputWatcher) {
     }
 
     function onPointer(e) {
+      if (!e.isTrusted) return;
       lastPointer = now();
       pointerTarget = pathTarget(e);
-      if (!pointerTarget) return;
-      if (pointerTarget.closest(SUBMIT_SELECTOR)) lastExplicit = now();
-      // A click on anything but a field (or its label) is the user's own
-      // action: a navigation or new tab after it is not the field's.
-      const label = pointerTarget.closest('label');
-      if (!Fo.isField(pointerTarget) && !(label && label.control)) unmark();
+      userAction(pointerTarget);
+    }
+
+    // click also fires for Enter or Space on a button and for a link opened
+    // from the keyboard, which a pointer listener never sees.
+    function onClick(e) {
+      if (!e.isTrusted) return;
+      userAction(pathTarget(e));
+    }
+
+    // A press or click on anything but a field (or its label) is the user's
+    // own action: a navigation, new tab or submit after it is not the field's.
+    function userAction(t) {
+      if (!t) return;
+      if (t.closest(SUBMIT_SELECTOR)) lastExplicit = now();
+      const label = t.closest('label');
+      if (!Fo.isField(t) && !(label && label.control)) unmark();
     }
 
     function onFocusIn(e) {
@@ -243,6 +265,7 @@ if (!globalThis.__a11yInputWatcher) {
       ['keydown', onKeydown],
       ['pointerdown', onPointer],
       ['mousedown', onPointer],
+      ['click', onClick],
       ['focusin', onFocusIn],
       ['focusout', onFocusOut],
       ['input', onFieldEvent],
@@ -261,10 +284,12 @@ if (!globalThis.__a11yInputWatcher) {
       return { active: true };
     }
 
+    // Returns the effects an open window has seen so far; the popup hands
+    // them to the SW with its stop message (a post could arrive after it).
     function stop() {
-      if (!active) return { active: false };
-      // Report what the open window has seen so far before stopping.
-      if (win) closeWindow();
+      if (!active) return { active: false, events: [] };
+      const events = [];
+      if (win) closeWindow((event) => events.push(event));
       active = false;
       if (observer) observer.disconnect();
       observer = null;
@@ -274,7 +299,7 @@ if (!globalThis.__a11yInputWatcher) {
       pointerTarget = null;
       markAt = 0;
       delete document.documentElement.dataset.a11yInputWatcher;
-      return { active: false };
+      return { active: false, events };
     }
 
     globalThis.__a11yCheckers.inputWatcher = function inputWatcher(cmd) {
