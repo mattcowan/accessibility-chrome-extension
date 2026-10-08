@@ -129,6 +129,26 @@
       <span class="badge" id="badge-keyboard-access" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="form-labels"
+        title="Include in Run selected" aria-label="Include Form labels in Run selected">
+      <span class="name">Form labels <small>1.3.1 / TT 5.C — group labels, required cues, repeated names</small></span>
+      <button type="button" id="run-form-labels"
+        title="Find radio and checkbox groups with no group label, required cues that do not match the field, and fields with the same name. It only reads the form.">Run</button>
+      <span class="badge" id="badge-form-labels" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Error capture <small>3.3.1 / TT 5.F, 5.G — records the errors a form shows after you submit</small></span>
+      <button type="button" id="toggle-error-capture"
+        title="Record what each field shows after you submit bad data: error text, how it is tied to the field, aria-invalid, announcements and color. It only watches: type and submit yourself.">Start capture</button>
+      <span class="badge" id="badge-error-capture" hidden></span>
+    </div>
+    <div class="checker-row">
+      <span class="name">Input watcher <small>3.2.2 / 4.1.2 (TT 5.D, 5.E) — logs what changing a field causes</small></span>
+      <button type="button" id="toggle-input-watcher"
+        title="Log what each field change causes: a navigation, a new tab, a submit, a focus move by a script, or content shown elsewhere. It only watches: change the fields yourself.">Start watcher</button>
+      <span class="badge" id="badge-input-watcher" hidden></span>
+    </div>
+    <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="target-size"
         title="Include in Run selected" aria-label="Include Target size in Run selected">
       <span class="name">Target size <small>2.5.8</small></span>
@@ -167,7 +187,7 @@
     <div class="checker-row">
       <button type="button" id="clear-overlays" class="secondary">Clear overlays</button>
       <button type="button" id="clear-all-checkers" class="secondary"
-        title="Remove overlays, spacing overrides, the inspector, and the focus locator from the page, and clear this tab's findings">
+        title="Remove overlays, spacing overrides, the inspector, the focus locator, error capture and the input watcher from the page, and clear this tab's findings">
         Clear all checkers
       </button>
     </div>

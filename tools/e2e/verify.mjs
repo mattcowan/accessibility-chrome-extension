@@ -11,8 +11,10 @@
 // Coverage today: motion 2.2.2 / TT 2.B mechanisms, the audio checker
 // (1.4.2 / TT 2.A) under allowed and blocked autoplay, Reload and record
 // (popup and side-panel contexts), the batch runner, the recorder
-// handshake, the keyboard access scan (2.1.1 / TT 4.A) and the focus locator
-// (real Tab / Shift+Tab presses). Older checkers (text spacing, target size, focus, hover, reflow,
+// handshake, the keyboard access scan (2.1.1 / TT 4.A), the focus locator
+// (real Tab / Shift+Tab presses), and the Trusted Tester section 5 tools: form
+// labels (5.C), error capture (5.F / 5.G) and the input watcher (5.D / 5.E),
+// where the test plays the tester with real clicks, keys and selects. Older checkers (text spacing, target size, focus, hover, reflow,
 // accname, live regions) are not covered yet; add a section per checker.
 //
 // How it works (see CLAUDE.md "Verify changes" for the gotchas):
@@ -593,6 +595,233 @@ try {
     const cleared = await page.evaluate(() => !document.getElementById('__a11y-focus-locator') && !document.documentElement.hasAttribute('data-a11y-focus-locator'));
     const label2 = await env.popup.evaluate(() => document.getElementById('toggle-focus-locator').textContent);
     check('[locator] Clear all checkers stops the locator', cleared && label2 === 'Start locator', `${cleared} ${label2}`);
+    await page.close();
+  }
+  await env.ctx.close();
+
+  // ============ #24: form labels (1.3.1 / TT 5.C) ============
+  env = await launch('no-user-gesture-required');
+  {
+    const f = await assertPage(env, '[form-labels]', 'form-labels.html', {
+      tool: 'form-labels', buttonId: 'run-form-labels', wcag: '1.3.1', waitMs: 500,
+    });
+    const det = (sel) => (f.find((x) => x.selector === sel) || {}).details || '';
+    const qty = det('#qty-a');
+    check('[form-labels] repeated "Quantity": row and column headers listed for each field', /"Widget A"/.test(qty) && /"Widget B"/.test(qty) && /column header "Quantity"/.test(qty) && !/Nothing tells/.test(qty), qty);
+    check('[form-labels] table with no th: the finding says nothing tells the fields apart', /Nothing tells/.test(det('#qty-plain-a')), det('#qty-plain-a'));
+    check('[form-labels] group with aria-describedby quotes the description', /Do you want the newsletter/.test(det('#newsletter-yes')), det('#newsletter-yes'));
+    check('[form-labels] bulk-select checkboxes with row headers: review, headers named', /Every member is in a table cell with headers/.test(det('#order-1001')), det('#order-1001'));
+    check('[form-labels] aria-labelledby that joins the question: review, name quoted', /joins more than one element \("How do you want to pay\? Card"\)/.test(det('#pay-card')), det('#pay-card'));
+    check('[form-labels] every finding is 1.3.1', f.length > 0 && f.every((x) => x.wcag === '1.3.1'), JSON.stringify(f.map((x) => x.wcag)));
+  }
+  {
+    const { page, tabId } = await openFixture(env, 'form-labels.html', 500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => {
+      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'form-labels';
+    });
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+    const bf = await storedFindings(env, tabId, 'form-labels');
+    check('[batch] Run selected runs the form labels checker', severityFor(bf, '#contact-email', '1.3.1') === 'fail', JSON.stringify(bf.map((x) => [x.severity, x.selector])));
+    await page.close();
+  }
+
+  // ============ #22: error capture (3.3.1 / TT 5.F, 5.G) ============
+  // The test plays the tester: it clicks each Submit button with the fields
+  // empty. The capture only watches.
+  {
+    const { page, tabId } = await openFixture(env, 'form-errors.html', 500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    // (h)'s valid field has focus at Start, so its first baseline is its
+    // focus style (the capture replaces it when the field loses focus).
+    await page.focus('#h-company');
+    await clickAndWait(env, 'toggle-error-capture', /^error capture: on/);
+    const captures = () => page.evaluate(() => Number(document.documentElement.dataset.a11yErrorCaptures || 0));
+    const enterIn = (sel) => async () => {
+      await page.click(sel);
+      await page.keyboard.press('Enter');
+    };
+    const steps = [
+      ...['submit-a', 'submit-b', 'submit-c', 'submit-d', 'submit-e', 'submit-f'].map((id) => [id, () => page.click(`#${id}`)]),
+      ['Enter in #g-code', enterIn('#g-code')],
+      ['Enter in #h-company', enterIn('#h-company')],
+    ];
+    for (const [id, act] of steps) {
+      const before = await captures();
+      await act();
+      const done = await page
+        .waitForFunction((n) => Number(document.documentElement.dataset.a11yErrorCaptures || 0) > n, before, { timeout: 8000 })
+        .then(() => true, () => false);
+      check(`[error-capture] a capture window closed after #${id}`, done, `captures still ${before}`);
+    }
+    await sleep(500);
+    // Pushed by the page to the open popup (errorCaptureUpdate), no popup click.
+    const f = await storedFindings(env, tabId, 'error-capture');
+    for (const e of await expectations(env, tabId)) {
+      const got = severityFor(f, e.sel, '3.3.1');
+      check(`[error-capture] form-errors.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}; findings: ${JSON.stringify(f.map((x) => [x.severity, x.selector, x.details.slice(0, 120)]))}`);
+    }
+    const det = (sel) => (f.find((x) => x.selector === sel) || {}).details || '';
+    check('[error-capture] (a) quotes the error text and names aria-describedby and aria-invalid', /"Enter your email address, for example name@example.com\." \(tied by aria-describedby\)/.test(det('#a-email')) && /Cues found:[^.]*aria-invalid="true"/.test(det('#a-email')), det('#a-email'));
+    check('[error-capture] (a) names the missing announcement', /Cues missing:[^]*an announcement/.test(det('#a-email')), det('#a-email'));
+    check('[error-capture] (b) text near the field is "not tied", and the tie is a missing cue', /"Enter your first name\." \(near the field, not tied\)/.test(det('#b-first')) && /Cues missing: [^]*text tied to the field/.test(det('#b-first')), det('#b-first'));
+    check('[error-capture] (c) color only: says no error text was found', /No error text was found/.test(det('#c-city')) && /border color/.test(det('#c-city')), det('#c-city'));
+    check('[error-capture] (d) type="button" script form: role="alert" announcement found', /Announced: "Phone number is required\." \(role="alert"\)/.test(det('#d-phone')), det('#d-phone'));
+    check('[error-capture] (e) error summary link and the focus move to it', /"Enter your full name" \(in an error summary link\)/.test(det('#e-name')) && /Focus moved to #e-summary/.test(det('#e-name')), det('#e-name'));
+    check('[error-capture] (f) browser validation (invalid event) recorded', /Browser validation message: "/.test(det('#f-zip')) && /Focus moved to the field/.test(det('#f-zip')), det('#f-zip'));
+    const g = det('#g-code');
+    check('[error-capture] (g) Enter in the field: focus that stays is not a focus move', /"Enter the promo code from your email."/.test(g) && !/Focus moved/.test(g) && /Cues missing:[^]*an announcement/.test(g), g);
+    check('[error-capture] (g) a focus style is not counted as an error color', !/a color change/.test(g), g);
+    // Eight capture windows each pushed an incremental store; a fresh profile
+    // has no history, so every finding must still be "new".
+    check('[error-capture] incremental updates keep every finding "new"', f.length > 0 && f.every((x) => x.status === 'new'), JSON.stringify(f.map((x) => [x.selector, x.status])));
+    check('[error-capture] every finding is 3.3.1', f.length > 0 && f.every((x) => x.wcag === '3.3.1'), JSON.stringify(f.map((x) => x.wcag)));
+
+    // The popup re-syncs its label from the page.
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.getElementById('toggle-error-capture').textContent === 'Stop capture', null, { timeout: 5000 }).catch(() => {});
+    check('[error-capture] reopened popup shows "Stop capture"', (await env.popup.evaluate(() => document.getElementById('toggle-error-capture').textContent)) === 'Stop capture');
+
+    // Stop removes everything the capture added; the findings stay.
+    await clickAndWait(env, 'toggle-error-capture', /^error capture: off/);
+    const leftovers = await page.evaluate(() => [...document.documentElement.attributes].map((a) => a.name).filter((n) => n.startsWith('data-a11y')));
+    check('[error-capture] Stop removes the page markers', !leftovers.length, JSON.stringify(leftovers));
+    check('[error-capture] findings stay after Stop', (await storedFindings(env, tabId, 'error-capture')).length === f.length);
+
+    // Clear all checkers also stops it.
+    await clickAndWait(env, 'toggle-error-capture', /^error capture: on/);
+    await clickAndWait(env, 'clear-all-checkers', /^Cleared/);
+    const cleared = await page.evaluate(() => !document.documentElement.hasAttribute('data-a11y-error-capture'));
+    const label = await env.popup.evaluate(() => document.getElementById('toggle-error-capture').textContent);
+    check('[error-capture] Clear all checkers stops the capture', cleared && label === 'Start capture', `${cleared} ${label}`);
+    await page.close();
+  }
+
+  // ============ #23: input watcher (3.2.2 / 4.1.2, TT 5.D / 5.E) ============
+  // The test plays the tester (real clicks, keys and selects); the watcher
+  // only watches. The select in (a) navigates last, and the findings are then
+  // read from the SW-kept log by a freshly loaded popup.
+  {
+    const { page, tabId } = await openFixture(env, 'form-input.html', 500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on/);
+    const settle = () => sleep(1400); // the watcher's effect window is 1 s
+    // (f) Type, then Tab away: a user focus move, not logged.
+    await page.click('#plain');
+    await page.keyboard.type('Sam', { delay: 40 });
+    await page.keyboard.press('Tab');
+    await settle();
+    // (c) The page moves focus after the third digit.
+    await page.click('#phone-area');
+    await sleep(200);
+    await page.keyboard.type('312', { delay: 60 });
+    await settle();
+    await page.click('#ship-other'); // (d)
+    await settle();
+    await page.click('#gift-yes'); // (e)
+    await settle();
+    await page.selectOption('#sort', 'price'); // (g)
+    await settle();
+    await page.click('#instock'); // (j) the page then runs filterButton.click()
+    await settle();
+    // (i) ArrowDown on a closed select changes its value; the page then
+    // moves focus. Arrow keys outside a radio group are not a user focus move.
+    // A label click focuses the select like a tester would (page.focus() is
+    // a script focus, which the watcher rightly logs) and leaves it closed.
+    await page.click('label[for="units"]');
+    await page.keyboard.press('ArrowDown');
+    await settle();
+    const opened = env.ctx.waitForEvent('page', { timeout: 5000 }).catch(() => null);
+    await page.click('#newwin'); // (b)
+    const newTab = await opened;
+    check('[input-watcher] the checkbox opened a new tab', !!newTab);
+    await sleep(800);
+    if (newTab) await newTab.close();
+    await page.bringToFront();
+    await sleep(500);
+    // Before the navigation: the open popup has synced the log once per new
+    // entry on this page, and none of those incremental stores may turn a
+    // finding found seconds earlier into "existing".
+    const mid = await storedFindings(env, tabId, 'input-watcher');
+    check('[input-watcher] incremental syncs keep every finding "new"', mid.length >= 5 && mid.every((x) => x.status === 'new'), JSON.stringify(mid.map((x) => [x.selector, x.status])));
+    const firstUrl = page.url();
+    await Promise.all([page.waitForURL(/country=ca/), page.selectOption('#country', 'ca')]); // (a)
+    await page.waitForLoadState('load');
+    await sleep(800);
+
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.getElementById('report-summary'));
+    await sleep(1500);
+    const f = await storedFindings(env, tabId, 'input-watcher');
+    for (const e of await expectations(env, tabId)) {
+      const got = severityFor(f, e.sel);
+      check(`[input-watcher] form-input.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}; findings: ${JSON.stringify(f.map((x) => [x.wcag, x.selector, x.details.slice(0, 140)]))}`);
+    }
+    const one = (sel, wcag) => f.find((x) => x.selector === sel && x.wcag === wcag) || { details: '' };
+    const nav = one('#country', '3.2.2');
+    check('[input-watcher] (a) navigation logged and kept after the page navigated', /The page navigated or reloaded to [^ ]*country=ca/.test(nav.details), nav.details);
+    check('[input-watcher] (a) the finding keeps the URL of the page the field was on', nav.url === firstUrl, `${nav.url} vs ${firstUrl}`);
+    // window.open tabs have no URL yet at tabs.onCreated, so none is asserted.
+    check('[input-watcher] (b) new tab logged', /A new tab or window opened/.test(one('#newwin', '3.2.2').details), one('#newwin', '3.2.2').details);
+    check('[input-watcher] (c) script focus move logged', /A script moved focus to #phone-rest/.test(one('#phone-area', '3.2.2').details), one('#phone-area', '3.2.2').details);
+    check('[input-watcher] (d) content shown, not announced', /shown or added at #other-address/.test(one('#ship-other', '4.1.2').details) && /no live region changed/.test(one('#ship-other', '4.1.2').details), one('#ship-other', '4.1.2').details);
+    check('[input-watcher] (e) content shown and announced', /shown or added at #gift-fields/.test(one('#gift-yes', '4.1.2').details) && /live region changed to "A gift message field was added below\."/.test(one('#gift-yes', '4.1.2').details), one('#gift-yes', '4.1.2').details);
+    check('[input-watcher] (i) ArrowDown on a select, then a script focus move, is logged', /A script moved focus to #height/.test(one('#units', '3.2.2').details), one('#units', '3.2.2').details);
+    check('[input-watcher] (j) a script click on the submit button is not a user action: submit logged', /A form was submitted/.test(one('#instock', '3.2.2').details), one('#instock', '3.2.2').details);
+    check('[input-watcher] (g) form submit on change logged', /A form was submitted/.test(one('#sort', '3.2.2').details), one('#sort', '3.2.2').details);
+    check('[input-watcher] a Tab press is not logged as a script focus move', !f.some((x) => /#after-plain/.test(x.details)), JSON.stringify(f.map((x) => x.details)));
+    check('[input-watcher] the radio click focus is not logged as a script move', !/A script moved focus/.test(one('#ship-other', '3.2.2').details + one('#gift-yes', '3.2.2').details), one('#ship-other', '3.2.2').details + ' | ' + one('#gift-yes', '3.2.2').details);
+    check('[input-watcher] every finding is review', f.length > 0 && f.every((x) => x.severity === 'review'));
+    const dbgState = await env.popup.evaluate(async (k) => (await chrome.storage.session.get(k))[k] || null, `tab:${tabId}`);
+    check('[input-watcher] the debugger was never attached', !dbgState || !dbgState.attached, JSON.stringify(dbgState));
+
+    // After the navigation the page script is gone but the log is kept.
+    const label = await env.popup.evaluate(() => document.getElementById('toggle-input-watcher').textContent);
+    check('[input-watcher] popup offers to resume after the navigation', label === 'Resume watcher', label);
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on, continuing a log/);
+
+    // Type, Tab, then Space on the submit button: the user's own submit. The
+    // navigation must not be logged against the field (Space fires click,
+    // never pointerdown).
+    await page.click('#search');
+    await page.keyboard.type('abc', { delay: 40 });
+    await page.keyboard.press('Tab');
+    await Promise.all([page.waitForURL(/q=abc/), page.keyboard.press('Space')]);
+    await page.waitForLoadState('load');
+    await sleep(800);
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.getElementById('toggle-input-watcher').textContent === 'Resume watcher', null, { timeout: 5000 }).catch(() => {});
+    await sleep(800);
+    const f2 = await storedFindings(env, tabId, 'input-watcher');
+    check('[input-watcher] Tab then Space on a submit button: no finding on the field', !f2.some((x) => x.selector === '#search'), JSON.stringify(f2.filter((x) => x.selector === '#search').map((x) => x.details)));
+    check('[input-watcher] the log continued across both navigations', f2.length === f.length, `${f2.length} vs ${f.length}`);
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on, continuing a log/);
+
+    // Stop less than 1 s after a change: the open window's effect still
+    // reaches the final log (a second identical content change on the field).
+    // The Stop click goes through evaluate(): Playwright's click on the
+    // background popup tab can take longer than the 1 s window.
+    await page.click('#ship-other');
+    await env.popup.evaluate(() => {
+      document.getElementById('status').textContent = '';
+      document.getElementById('toggle-input-watcher').click();
+    });
+    await env.popup.waitForFunction(() => /^input watcher: off/.test(document.getElementById('status').textContent));
+    const f3 = await storedFindings(env, tabId, 'input-watcher');
+    const ship = (f3.find((x) => x.selector === '#ship-other' && x.wcag === '4.1.2') || {}).details || '';
+    // The same field logged changes on two pages: one finding (one
+    // fingerprint), each sentence naming its page. The q=abc one is the
+    // window that was still open at Stop.
+    check('[input-watcher] Stop right after a change keeps the effect of the open window', /#other-address[^]*\(On [^ ]*form-input\.html\?q=abc\.\)/.test(ship), ship);
+    check('[input-watcher] changes on two pages: one finding, both pages named', /\(On [^ ]*form-input\.html\.\)/.test(ship) && f3.filter((x) => x.selector === '#ship-other' && x.wcag === '4.1.2').length === 1, ship);
+    // Start again to test that Stop removes everything.
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on/);
+    // Stop removes everything the watcher added, and its SW log; the findings stay.
+    await clickAndWait(env, 'toggle-input-watcher', /^input watcher: off/);
+    const marker = await page.evaluate(() => document.documentElement.hasAttribute('data-a11y-input-watcher'));
+    const log = await env.popup.evaluate(async (k) => (await chrome.storage.session.get(k))[k] || null, `watch:${tabId}`);
+    check('[input-watcher] Stop removes the page marker and the SW log', !marker && !log, JSON.stringify({ marker, log }));
+    check('[input-watcher] findings stay after Stop', (await storedFindings(env, tabId, 'input-watcher')).length === f3.length);
     await page.close();
   }
   await env.ctx.close();
