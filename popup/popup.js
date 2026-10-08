@@ -22,7 +22,15 @@ const RECORD_SETTLE_MS = 4000;
 const ACTIVATION_EXPIRY_MS = 6000;
 let recordingAudio = false; // Reload and record in progress (side panel guards)
 let tabSwitchedWhileRecording = false; // side panel: re-sync once recording ends
-const LIVE_FILES = [...LIBS, 'checkers/live-regions.js'];
+// Live-region detection, shared by the monitor, Error capture and the Input
+// watcher.
+const LIVE = 'checkers/lib/live.js';
+const LIVE_FILES = [...LIBS, LIVE, 'checkers/live-regions.js'];
+// Form-field helpers (group labels, table headers, nearby text) for the three
+// Trusted Tester section 5 tools.
+const FORMS = ['checkers/lib/accname.js', 'checkers/lib/forms.js'];
+const ERROR_FILES = [...LIBS, ...FORMS, FOCUS_STYLE, LIVE, 'checkers/error-capture.js'];
+const WATCH_FILES = [...LIBS, ...FORMS, LIVE, 'checkers/input-watcher.js'];
 const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
 
 const $ = (id) => document.getElementById(id);
@@ -235,7 +243,9 @@ async function getStore() {
 async function storeToolFindings(tool, rawFindings) {
   const url = tab.url;
   const now = new Date().toISOString();
-  const stamped = rawFindings.map((f) => ({ ...f, url, timestamp: now }));
+  // A finding may carry its own url: the Input watcher logs a field on the
+  // page the tab has since navigated away from.
+  const stamped = rawFindings.map((f) => ({ ...f, url: f.url || url, timestamp: now }));
 
   // Diff against the previous run for this URL+tool (survives restarts).
   const histKey = `history:${normUrl(url)}:${tool}`;
@@ -262,6 +272,9 @@ const BADGE_BY_TOOL = {
   'text-spacing': 'badge-text-spacing',
   'focus-visibility': 'badge-focus',
   'keyboard-access': 'badge-keyboard-access',
+  'form-labels': 'badge-form-labels',
+  'error-capture': 'badge-error-capture',
+  'input-watcher': 'badge-input-watcher',
   'target-size': 'badge-target-size',
   'hover-content': 'badge-hover',
   reflow: 'badge-reflow',
@@ -486,6 +499,91 @@ async function highlightAllForTool(tool) {
   }
 }
 
+// ------------------------------------------------------------- input watcher
+
+// The watcher's log lives in chrome.storage.session (`watch:${tabId}`, kept
+// by the SW across navigations). Each field gets one finding per criterion:
+// 3.2.2 (TT 5.D) for a navigation, new tab, submit or script focus move;
+// 4.1.2 (TT 5.E) for content shown elsewhere. Every finding is `review`.
+const WATCH_WCAG = { navigation: '3.2.2', 'new-tab': '3.2.2', submit: '3.2.2', focus: '3.2.2', content: '4.1.2' };
+
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 3)}...` : s);
+
+function watchSentence(ev) {
+  const via = ev.cause ? ` (after ${ev.cause})` : '';
+  const named = (t) => `${t.selector}${t.name ? ` ("${clip(t.name, 60)}")` : ''}`;
+  switch (ev.kind) {
+    case 'navigation':
+      return `The page navigated or reloaded${ev.to ? ` to ${ev.to}` : ''}${via}.`;
+    case 'new-tab':
+      return `A new tab or window opened${ev.to ? ` (${ev.to})` : ''}${via}.`;
+    case 'submit':
+      return `A form was submitted with no Enter key or submit-button click before it${via}.`;
+    case 'focus':
+      return `A script moved focus to ${named(ev.target)}; no Tab key or click came before it${via}.`;
+    case 'content': {
+      const text = ev.target.text ? ` ("${clip(ev.target.text, 80)}")` : '';
+      const how = ev.focusMoved
+        ? 'Focus moved to it.'
+        : ev.announced && ev.announced.length
+          ? `Focus did not move to it. A live region changed to ${ev.announced.map((a) => `"${clip(a, 80)}"`).join(', ')}.`
+          : 'Focus did not move to it, and no live region changed.';
+      return `Content was shown or added at ${ev.target.selector}${text}${via}. ${how}`;
+    }
+    default:
+      return '';
+  }
+}
+
+const WATCH_ADVICE = {
+  '3.2.2':
+    'WCAG 3.2.2 (TT 5.D): changing a field must not change the context unless the user was told before using it. Check for that advance warning.',
+  '4.1.2':
+    'TT 5.E (WCAG 4.1.2) passes when the field says what it changes, focus moves to the new content, a dialog tells the user, or the new content is in a live region. Check how the user is told.',
+};
+
+function watchFindings(events) {
+  const groups = new Map();
+  for (const ev of events) {
+    const wcag = WATCH_WCAG[ev.kind];
+    if (!wcag || !ev.field) continue;
+    const key = `${ev.field.selector}|${wcag}`;
+    if (!groups.has(key)) groups.set(key, { ev, wcag, sentences: new Map() });
+    const s = watchSentence(ev);
+    const g = groups.get(key);
+    g.sentences.set(s, (g.sentences.get(s) || 0) + 1);
+  }
+  return [...groups.values()].map(({ ev, wcag, sentences }) => {
+    const lines = [...sentences].map(([s, n]) => (n > 1 ? `${s} (${n} times)` : s));
+    const name = ev.field.name ? ` ("${clip(ev.field.name, 60)}")` : '';
+    return {
+      tool: 'input-watcher',
+      wcag,
+      severity: 'review',
+      selector: ev.field.selector,
+      snippet: ev.field.snippet || '',
+      url: ev.field.url,
+      details: `After a change on this field${name}: ${lines.join(' ')} ${WATCH_ADVICE[wcag]}`,
+    };
+  });
+}
+
+// Merge the log into this report. Findings already in the report stay (a
+// restarted watcher starts a new log), and a field's finding from the log
+// replaces its older one.
+async function syncWatchFindings() {
+  if (!tab || restricted) return;
+  const key = `watch:${tab.id}`;
+  const state = (await chrome.storage.session.get(key))[key];
+  if (!state || !state.events || !state.events.length) return;
+  const derived = watchFindings(state.events);
+  const store = await getStore();
+  const existing = (store.tools['input-watcher'] && store.tools['input-watcher'].findings) || [];
+  const fresh = new Set(derived.map(fingerprint));
+  const kept = existing.filter((f) => !fresh.has(fingerprint(f)));
+  await storeToolFindings('input-watcher', [...kept, ...derived]);
+}
+
 // ------------------------------------------------------------ checker wiring
 
 // Declarative checker registry: drives both the per-row Run buttons and the
@@ -493,8 +591,8 @@ async function highlightAllForTool(tool) {
 // runs after target-size/reflow (its analyze pass applies the override
 // stylesheet, which would skew their measurements) and the slow hover probe
 // runs last. The stateful toggles (text-spacing apply/remove, accname
-// inspector, live-regions monitor, focus locator) are deliberately not
-// batchable and stay outside the registry, as does audio's Reload and record
+// inspector, live-regions monitor, focus locator, error capture, input
+// watcher) are deliberately not batchable and stay outside the registry, as does audio's Reload and record
 // (it reloads the page, which would reset what the other checkers measure).
 const CHECKERS = [
   { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
@@ -508,6 +606,9 @@ const CHECKERS = [
     batchDefault: true },
   { id: 'keyboard-access', tool: 'keyboard-access', buttonId: 'run-keyboard-access', kind: 'keyboard',
     files: [OVERLAY, 'checkers/keyboard-access.js'],
+    batchDefault: true },
+  { id: 'form-labels', tool: 'form-labels', buttonId: 'run-form-labels', kind: 'simple',
+    files: [...FORMS, 'checkers/form-labels.js'], fnName: 'formLabels', allFrames: true,
     batchDefault: true },
   { id: 'target-size', tool: 'target-size', buttonId: 'run-target-size', kind: 'simple',
     files: [OVERLAY, 'checkers/target-size.js'], fnName: 'targetSize', allFrames: true,
@@ -793,6 +894,46 @@ async function refreshFocusLocatorButton() {
   }
 }
 
+// Error capture keeps its results page-side. A capture window that closed
+// while no popup or panel was open is picked up here.
+async function refreshErrorCaptureButton() {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const ec = globalThis.__a11yCheckers && globalThis.__a11yCheckers.errorCapture;
+        if (!ec || document.documentElement.dataset.a11yErrorCapture !== 'on') return null;
+        return { ...ec('status'), findings: ec('collect') };
+      },
+    });
+    const state = res.result;
+    $('toggle-error-capture').textContent = state && state.active ? 'Stop capture' : 'Start capture';
+    if (state && state.captures) await storeToolFindings('error-capture', state.findings);
+  } catch {
+    // leave default label
+  }
+}
+
+// "Resume" when the SW still holds an active log but the page script is gone
+// (the page navigated): starting again continues the same log.
+async function refreshInputWatcherButton() {
+  try {
+    const key = `watch:${tab.id}`;
+    const sw = (await chrome.storage.session.get(key))[key];
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.documentElement.dataset.a11yInputWatcher === 'on',
+    });
+    $('toggle-input-watcher').textContent = res.result
+      ? 'Stop watcher'
+      : sw && sw.active
+        ? 'Resume watcher'
+        : 'Start watcher';
+  } catch {
+    // leave default label
+  }
+}
+
 async function refreshLiveRegionsButton() {
   try {
     const [res] = await chrome.scripting.executeScript({
@@ -849,6 +990,8 @@ function wireCheckers() {
       refreshAccnameButton();
       refreshLiveRegionsButton();
       refreshFocusLocatorButton();
+      refreshErrorCaptureButton();
+      refreshInputWatcherButton();
     } catch (err) {
       checkerError(err);
     } finally {
@@ -912,6 +1055,71 @@ function wireCheckers() {
           ? 'focus locator: on. Click the page, then press Tab; the outline follows focus.'
           : 'focus locator: off.'
       );
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+
+  // Error capture: records what the form shows after the tester submits.
+  // Results arrive as errorCaptureUpdate messages (wired in init); Stop
+  // stores the final set before it removes the capture.
+  $('toggle-error-capture').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await inject(ERROR_FILES);
+      // Ask the page, not the button label (the popup and the side panel can
+      // both be open).
+      const [status] = await callChecker('errorCapture', 'status');
+      const starting = !status?.result?.active;
+      if (starting) {
+        const [res] = await callChecker('errorCapture', 'start');
+        e.target.textContent = 'Stop capture';
+        announce(
+          `error capture: on, ${res.result.fields} fields recorded. Type bad data and submit the form yourself; ` +
+            'the capture records what the page shows.'
+        );
+      } else {
+        const [res] = await callChecker('errorCapture', 'collect');
+        if (status.result.captures) await storeToolFindings('error-capture', res.result);
+        await callChecker('errorCapture', 'stop');
+        e.target.textContent = 'Start capture';
+        announce('error capture: off.');
+      }
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+
+  // Input watcher: logs what the tester's own field changes cause. The SW
+  // keeps the log (it outlives a navigation); the page script reports to it.
+  $('toggle-input-watcher').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await inject(WATCH_FILES);
+      const [status] = await callChecker('inputWatcher', 'status');
+      const starting = !status?.result?.active;
+      if (starting) {
+        const res = await send({ type: 'inputWatch', action: 'start' });
+        if (!res || !res.ok) throw new Error((res && res.error) || 'The service worker did not start the watcher.');
+        await callChecker('inputWatcher', 'start');
+        e.target.textContent = 'Stop watcher';
+        const logged = res.state.events.length;
+        announce(
+          `input watcher: on${logged ? `, continuing a log of ${logged} change${logged === 1 ? '' : 's'}` : ''}. ` +
+            'Change the fields yourself and tab away; each effect a change causes is logged.'
+        );
+        await syncWatchFindings();
+      } else {
+        await callChecker('inputWatcher', 'stop');
+        await syncWatchFindings();
+        await send({ type: 'inputWatch', action: 'stop' });
+        e.target.textContent = 'Start watcher';
+        announce('input watcher: off. Its findings stay in the report.');
+      }
     } catch (err) {
       checkerError(err);
     } finally {
@@ -983,7 +1191,8 @@ function wireCheckers() {
 
   // Full reset: every artifact a checker leaves on the page (overlay layer,
   // text-spacing override stylesheet, live accname inspector, live-region log
-  // panels, focus locator), plus this tab's stored findings. Motion/reflow/
+  // panels, focus locator, error capture, input watcher and its SW log), plus
+  // this tab's stored findings. Motion/reflow/
   // hover leave nothing behind.
   $('clear-all-checkers').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -1006,6 +1215,13 @@ function wireCheckers() {
       await inject(LOCATOR_FILES);
       await callChecker('focusLocator', 'stop');
       $('toggle-focus-locator').textContent = 'Start locator';
+      await inject(ERROR_FILES);
+      await callChecker('errorCapture', 'stop');
+      $('toggle-error-capture').textContent = 'Start capture';
+      await inject(WATCH_FILES);
+      await callChecker('inputWatcher', 'stop');
+      await send({ type: 'inputWatch', action: 'stop' });
+      $('toggle-input-watcher').textContent = 'Start watcher';
       await clearFindingsStore();
       announce('Cleared overlays, spacing overrides, inspectors, and findings for this tab.');
     } catch (err) {
@@ -1118,6 +1334,11 @@ async function refreshForActiveTab() {
   refreshAccnameButton();
   refreshLiveRegionsButton();
   refreshFocusLocatorButton();
+  refreshErrorCaptureButton();
+  refreshInputWatcherButton();
+  // Catch up on watcher entries logged while no popup was open (a
+  // navigation, for example).
+  syncWatchFindings().catch(() => {});
 }
 
 async function init() {
@@ -1145,11 +1366,30 @@ async function init() {
   await refreshForActiveTab();
   initBatchSelection(); // once — the selection is a user preference, not per-tab
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  chrome.runtime.onMessage.addListener((msg, sender) => {
     if (msg && msg.type === 'stateChanged' && tab && msg.tabId === tab.id) {
       renderState(msg.state, null);
       if (msg.reason) banner(msg.reason);
     }
+    // Posted by the page's Error capture after each capture window.
+    if (
+      msg && msg.type === 'errorCaptureUpdate' && tab && !restricted &&
+      sender.tab && sender.tab.id === tab.id && Array.isArray(msg.findings)
+    ) {
+      storeToolFindings('error-capture', msg.findings).then(({ findings }) =>
+        announce(`error capture: ${findings.length} field${findings.length === 1 ? '' : 's'} with an error so far`)
+      );
+    }
+  });
+
+  // The Input watcher's log grows in session storage (SW-written); fold each
+  // new entry into the report while this popup or panel is open. Marks
+  // (one per keystroke) change `last`, not `events`, and are skipped.
+  chrome.storage.session.onChanged.addListener((changes) => {
+    const c = tab && changes[`watch:${tab.id}`];
+    if (!c || restricted) return;
+    const count = (v) => (v && v.events ? v.events.length : 0);
+    if (count(c.newValue) && count(c.newValue) !== count(c.oldValue)) syncWatchFindings().catch(() => {});
   });
 
   if (IS_PANEL) {

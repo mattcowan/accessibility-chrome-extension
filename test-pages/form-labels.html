@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Labels (TT 5.C)</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .test-section {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+    .test-section h2 { margin-top: 0; font-size: 1rem; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #999; padding: 0.3rem 0.6rem; text-align: left; }
+    input[type="number"] { width: 5rem; }
+  </style>
+</head>
+<body>
+  <h1>Form Labels</h1>
+  <p>
+    Fixture for the Form labels checker (WCAG 1.3.1, Trusted Tester 5.C).
+    <code>data-expect</code> is on the element that carries the finding: the first member of a radio group, or the first field of a set of fields with the same name.
+    Each case is its own form, so the cases do not share repeated names.
+  </p>
+
+  <div class="test-section">
+    <h2>(a) Radio group in a fieldset with a legend</h2>
+    <form>
+      <fieldset>
+        <legend>Shipping speed</legend>
+        <label><input type="radio" name="speed" id="speed-standard" value="standard" data-expect="pass"> Standard</label>
+        <label><input type="radio" name="speed" value="express"> Express</label>
+      </fieldset>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(b) Radio group with no group label</h2>
+    <form>
+      <p>Contact method</p>
+      <label><input type="radio" name="contact" id="contact-email" value="email" data-expect="fail"> Email</label>
+      <label><input type="radio" name="contact" value="phone"> Phone</label>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(c) role="radiogroup" with aria-labelledby</h2>
+    <form>
+      <div role="radiogroup" aria-labelledby="size-label">
+        <span id="size-label">Size</span>
+        <label><input type="radio" name="size" id="size-small" value="s" data-expect="pass"> Small</label>
+        <label><input type="radio" name="size" value="l"> Large</label>
+      </div>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(d) Radio group with no group label, but aria-describedby on the members</h2>
+    <form>
+      <p id="newsletter-q">Do you want the newsletter?</p>
+      <label><input type="radio" name="newsletter" id="newsletter-yes" value="yes" aria-describedby="newsletter-q" data-expect="review"> Yes</label>
+      <label><input type="radio" name="newsletter" value="no" aria-describedby="newsletter-q"> No</label>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(e) Checkbox group in a fieldset with a legend</h2>
+    <form>
+      <fieldset>
+        <legend>Toppings</legend>
+        <label><input type="checkbox" name="topping" id="topping-cheese" value="cheese" data-expect="pass"> Cheese</label>
+        <label><input type="checkbox" name="topping" value="olives"> Olives</label>
+      </fieldset>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(f) Label shows "*" but the field is not required</h2>
+    <form>
+      <label for="full-name">Full name <span aria-hidden="true">*</span></label>
+      <input type="text" id="full-name" data-expect="review">
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(g) Required field whose label says "(required)"</h2>
+    <form>
+      <label for="email">Email (required)</label>
+      <input type="email" id="email" required data-expect="pass">
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(h) Required field with no visible cue</h2>
+    <form>
+      <label for="phone">Phone</label>
+      <input type="tel" id="phone" aria-required="true" data-expect="review">
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(i) Order table: a "Quantity" field per row, with row headers</h2>
+    <form>
+      <table>
+        <thead>
+          <tr><th scope="col">Product</th><th scope="col">Quantity</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Widget A</th><td><input type="number" id="qty-a" aria-label="Quantity" data-expect="review"></td></tr>
+          <tr><th scope="row">Widget B</th><td><input type="number" id="qty-b" aria-label="Quantity"></td></tr>
+        </tbody>
+      </table>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(j) The same table with no header cells</h2>
+    <form>
+      <table>
+        <tr><td>Product</td><td>Quantity</td></tr>
+        <tr><td>Widget A</td><td><input type="number" id="qty-plain-a" aria-label="Quantity" data-expect="review"></td></tr>
+        <tr><td>Widget B</td><td><input type="number" id="qty-plain-b" aria-label="Quantity"></td></tr>
+      </table>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(k) A plain labeled field</h2>
+    <form>
+      <label for="city">City</label>
+      <input type="text" id="city" data-expect="pass">
+    </form>
+  </div>
+</body>
+</html>

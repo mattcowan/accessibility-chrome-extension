@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Input Changes (TT 5.D / 5.E)</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .test-section {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+    .test-section h2 { margin-top: 0; font-size: 1rem; }
+    .field { margin: 0.5rem 0; }
+    input[size] { width: auto; }
+  </style>
+</head>
+<body>
+  <h1>Form Input Changes</h1>
+  <p>
+    Fixture for the Input watcher (WCAG 3.2.2, Trusted Tester 5.D, and 4.1.2, TT 5.E).
+    Start the watcher, then change each field yourself.
+    <code>data-expect</code> is the grade of the finding on the field that causes the change.
+  </p>
+
+  <div class="test-section">
+    <h2>(a) A select that navigates on change</h2>
+    <label for="country">Country</label>
+    <select id="country" data-expect="review">
+      <option value="">Choose a country</option>
+      <option value="us">United States</option>
+      <option value="ca">Canada</option>
+    </select>
+  </div>
+
+  <div class="test-section">
+    <h2>(b) A checkbox that opens a new window</h2>
+    <label><input type="checkbox" id="newwin" data-expect="review"> Show the terms</label>
+  </div>
+
+  <div class="test-section">
+    <h2>(c) A phone field that moves focus when it is full</h2>
+    <div class="field">
+      <label for="phone-area">Area code</label>
+      <input type="text" id="phone-area" maxlength="3" size="3" data-expect="review">
+      <label for="phone-rest">Number</label>
+      <input type="text" id="phone-rest" maxlength="7" size="7">
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>(d) A radio button that shows more fields, with no announcement</h2>
+    <fieldset>
+      <legend>Delivery address</legend>
+      <label><input type="radio" name="ship" id="ship-same" value="same" checked> Same as billing</label>
+      <label><input type="radio" name="ship" id="ship-other" value="other" data-expect="review"> Another address</label>
+    </fieldset>
+    <div id="other-address" hidden>
+      <label for="street">Street</label> <input type="text" id="street">
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>(e) A radio button that shows fields and announces them in a live region</h2>
+    <fieldset>
+      <legend>Is this a gift?</legend>
+      <label><input type="radio" name="gift" id="gift-no" value="no" checked> No</label>
+      <label><input type="radio" name="gift" id="gift-yes" value="yes" data-expect="review"> Yes</label>
+    </fieldset>
+    <div id="gift-fields" hidden>
+      <label for="gift-msg">Gift message</label> <input type="text" id="gift-msg">
+    </div>
+    <div role="status" id="gift-status"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>(f) A plain field</h2>
+    <label for="plain">Nickname</label>
+    <input type="text" id="plain" data-expect="pass">
+    <button type="button" id="after-plain">Next</button>
+  </div>
+
+  <div class="test-section">
+    <h2>(g) A select that submits its form on change</h2>
+    <form id="sort-form">
+      <label for="sort">Sort by</label>
+      <select id="sort" data-expect="review">
+        <option value="name">Name</option>
+        <option value="price">Price</option>
+      </select>
+    </form>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    if (params.get('country')) document.getElementById('country').value = params.get('country');
+
+    document.getElementById('country').addEventListener('change', (e) => {
+      location.href = `?country=${encodeURIComponent(e.target.value)}`;
+    });
+
+    document.getElementById('newwin').addEventListener('change', (e) => {
+      if (e.target.checked) window.open('form-input.html?terms=1', '_blank');
+    });
+
+    document.getElementById('phone-area').addEventListener('input', (e) => {
+      if (e.target.value.length === 3) document.getElementById('phone-rest').focus();
+    });
+
+    for (const r of document.querySelectorAll('input[name="ship"]')) {
+      r.addEventListener('change', () => {
+        document.getElementById('other-address').hidden = !document.getElementById('ship-other').checked;
+      });
+    }
+
+    for (const r of document.querySelectorAll('input[name="gift"]')) {
+      r.addEventListener('change', () => {
+        const yes = document.getElementById('gift-yes').checked;
+        document.getElementById('gift-fields').hidden = !yes;
+        document.getElementById('gift-status').textContent = yes ? 'A gift message field was added below.' : '';
+      });
+    }
+
+    const sortForm = document.getElementById('sort-form');
+    document.getElementById('sort').addEventListener('change', () => sortForm.requestSubmit());
+    sortForm.addEventListener('submit', (e) => e.preventDefault());
+  </script>
+</body>
+</html>

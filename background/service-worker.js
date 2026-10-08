@@ -21,15 +21,18 @@ function broadcast(tabId, state, reason = null) {
   chrome.runtime.sendMessage({ type: 'stateChanged', tabId, state, reason }).catch(() => {});
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (!msg || typeof msg.type !== 'string') return false;
-  handle(msg)
+// Notices that pages post for the popup / side panel; the SW does not answer.
+const PAGE_NOTICES = new Set(['errorCaptureUpdate']);
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg.type !== 'string' || PAGE_NOTICES.has(msg.type)) return false;
+  handle(msg, sender)
     .then(sendResponse)
     .catch((e) => sendResponse({ ok: false, error: e.message }));
   return true;
 });
 
-async function handle(msg) {
+async function handle(msg, sender) {
   const { type, tabId } = msg;
   switch (type) {
     case 'getState':
@@ -77,6 +80,9 @@ async function handle(msg) {
 
     case 'clickListeners':
       return handleClickListeners(tabId);
+
+    case 'inputWatch':
+      return handleInputWatch(msg, sender);
 
     case 'resetTab': {
       const res = await dbg.updateTabState(tabId, (s) => Object.assign(s, dbg.defaultTabState()));
@@ -209,6 +215,97 @@ async function recordAudioCycle(tabId) {
   }
 }
 
+// Input watcher (3.2.2 / 4.1.2, TT 5.D / 5.E). A navigation ends the page
+// script, so the watcher's log lives here, in chrome.storage.session under
+// `watch:${tabId}` (never in SW memory): {active, startedAt, last, events}.
+// The page marks each field change; a navigation or a new tab within
+// WATCH_MARK_MS of the mark is logged against that field. The popup turns the
+// log into findings. The watcher never attaches the debugger.
+const WATCH_MARK_MS = 5000;
+const WATCH_EVENT_CAP = 300;
+const WATCH_PAGE_ACTIONS = new Set(['mark', 'unmark', 'event']);
+const watchKey = (tabId) => `watch:${tabId}`;
+
+// Page messages and tab events race to read-modify-write the same entry, so
+// each tab's updates run in order. The queue only orders writes; it holds no
+// state that a restarted SW would need.
+const watchQueues = new Map();
+
+function updateWatch(tabId, fn) {
+  const prev = watchQueues.get(tabId) || Promise.resolve();
+  const next = prev.then(async () => {
+    const key = watchKey(tabId);
+    const state = (await chrome.storage.session.get(key))[key] || null;
+    const out = fn(state);
+    if (out === undefined) return state; // no change
+    if (out === null) await chrome.storage.session.remove(key);
+    else await chrome.storage.session.set({ [key]: out });
+    return out;
+  });
+  const settled = next.catch(() => {});
+  watchQueues.set(tabId, settled);
+  settled.then(() => {
+    if (watchQueues.get(tabId) === settled) watchQueues.delete(tabId);
+  });
+  return next;
+}
+
+function logWatchEvent(state, event) {
+  return { ...state, events: [...state.events, { ...event, at: Date.now() }].slice(-WATCH_EVENT_CAP) };
+}
+
+async function handleInputWatch(msg, sender) {
+  const { action } = msg;
+  if (WATCH_PAGE_ACTIONS.has(action)) {
+    // From the watcher's content script in the tab's top frame only.
+    const fromPage =
+      sender && sender.tab && sender.frameId === 0 && !(sender.url || '').startsWith(chrome.runtime.getURL(''));
+    if (!fromPage) return { ok: false, error: 'Not from a watched page' };
+    const tabId = sender.tab.id;
+    await updateWatch(tabId, (s) => {
+      if (!s || !s.active) return undefined;
+      if (action === 'mark') return { ...s, last: { ...msg.field, cause: msg.cause, at: Date.now() } };
+      if (action === 'unmark') return { ...s, last: null };
+      return logWatchEvent(s, msg.event);
+    });
+    return { ok: true };
+  }
+  const { tabId } = msg;
+  switch (action) {
+    case 'start': {
+      // A session that a navigation interrupted keeps its log.
+      const state = await updateWatch(tabId, (s) =>
+        s && s.active ? { ...s, last: null } : { active: true, startedAt: Date.now(), last: null, events: [] }
+      );
+      return { ok: true, state };
+    }
+    case 'stop':
+      await updateWatch(tabId, () => null);
+      return { ok: true };
+    case 'status':
+      return { ok: true, state: await updateWatch(tabId, () => undefined) };
+    default:
+      return { ok: false, error: `Unknown inputWatch action: ${action}` };
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, t) => {
+  if (changeInfo.status !== 'loading') return;
+  updateWatch(tabId, (s) => {
+    if (!s || !s.active || !s.last || Date.now() - s.last.at > WATCH_MARK_MS) return undefined;
+    const event = { kind: 'navigation', cause: s.last.cause, field: s.last, to: changeInfo.url || (t && t.url) || '' };
+    return { ...logWatchEvent(s, event), last: null };
+  }).catch(() => {});
+});
+
+chrome.tabs.onCreated.addListener((t) => {
+  if (t.openerTabId == null) return;
+  updateWatch(t.openerTabId, (s) => {
+    if (!s || !s.active || !s.last || Date.now() - s.last.at > WATCH_MARK_MS) return undefined;
+    return logWatchEvent(s, { kind: 'new-tab', cause: s.last.cause, field: s.last, to: t.pendingUrl || t.url || '' });
+  }).catch(() => {});
+});
+
 // Detached externally: infobar "x" clicked, DevTools attached, target crashed.
 chrome.debugger.onDetach.addListener(async (source, reason) => {
   if (!source.tabId) return;
@@ -226,7 +323,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   dbg.clearHolds(tabId);
   await dbg.clearTabState(tabId);
-  await chrome.storage.session.remove(`findings:${tabId}`);
+  await chrome.storage.session.remove([`findings:${tabId}`, watchKey(tabId)]);
 });
 
 // Re-apply emulation on navigation. Overrides should persist within a session,

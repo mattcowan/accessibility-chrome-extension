@@ -11,6 +11,7 @@
 //   __a11yCheckers.liveRegions('export') -> [{selector, politeness, role, message, timestamp}]
 //       Log data lives in this closure (page-side), so it survives popup
 //       close/reopen; export never depends on the panel DOM.
+// Needs selector.js, findings.js and lib/live.js.
 if (!globalThis.__a11yLiveRegions) {
   globalThis.__a11yLiveRegions = true;
 
@@ -18,9 +19,9 @@ if (!globalThis.__a11yLiveRegions) {
 
   (function () {
     const F = globalThis.__a11yFindings;
+    const { REGION_SELECTOR, politenessFor } = globalThis.__a11yLive;
     const PANEL_CLASS = '__a11y-live-panel';
     const DOCK_ID = '__a11y-live-dock';
-    const REGION_SELECTOR = '[aria-live], [role="status"], [role="log"], [role="alert"], output';
     const COLORS = { polite: '#15803d', assertive: '#b91c1c' };
     const DEDUPE_MS = 500;
 
@@ -28,19 +29,6 @@ if (!globalThis.__a11yLiveRegions) {
     let docObserver = null;
     // regionEl -> {selector, politeness, role, panel, logEl, entries, observer, lastMsg, lastTs}
     const regions = new Map();
-
-    function politenessFor(el) {
-      const live = (el.getAttribute('aria-live') || '').toLowerCase();
-      if (live === 'off') return null;
-      if (live === 'polite' || live === 'assertive') return live;
-      const role = (el.getAttribute('role') || '').toLowerCase();
-      if (role === 'alert') return 'assertive';
-      if (role === 'status' || role === 'log') return 'polite';
-      if (el.tagName === 'OUTPUT') return 'polite';
-      // aria-live present but with an unrecognized value — treat as polite.
-      if (live) return 'polite';
-      return null;
-    }
 
     function ensureDock() {
       let dock = document.getElementById(DOCK_ID);

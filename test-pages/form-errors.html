@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Errors (TT 5.F / 5.G)</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .test-section {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+    .test-section h2 { margin-top: 0; font-size: 1rem; }
+    .field { margin: 0.5rem 0; }
+    .field label { display: block; }
+    input { border: 1px solid #767676; padding: 0.25rem; }
+    .error { color: #b00020; }
+    /* (c): the only sign of the error is a red border. */
+    input.is-invalid { border: 2px solid #d00000; }
+    .summary { border: 3px solid #b00020; padding: 0.5rem 1rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Form Errors</h1>
+  <p>
+    Fixture for Error capture (WCAG 3.3.1, Trusted Tester 5.F; the quoted text supports 3.3.3, TT 5.G).
+    Start the capture, then press each Submit button with the fields empty.
+    <code>data-expect</code> is the grade of the field's finding.
+  </p>
+
+  <div class="test-section">
+    <h2>(a) Error tied with aria-describedby, plus aria-invalid</h2>
+    <form id="form-a" novalidate>
+      <div class="field">
+        <label for="a-email">Email</label>
+        <input type="email" id="a-email" aria-describedby="a-email-error" data-expect="review">
+        <span id="a-email-error" class="error"></span>
+      </div>
+      <div class="field">
+        <label for="a-note">Note (optional)</label>
+        <input type="text" id="a-note" data-expect="pass">
+      </div>
+      <button type="submit" id="submit-a">Submit</button>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(b) Error text near the field, with no association</h2>
+    <form id="form-b" novalidate>
+      <div class="field">
+        <label for="b-first">First name</label>
+        <input type="text" id="b-first" data-expect="review">
+        <span class="error" id="b-first-msg"></span>
+      </div>
+      <button type="submit" id="submit-b">Submit</button>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(c) A red border only</h2>
+    <form id="form-c" novalidate>
+      <div class="field">
+        <label for="c-city">City</label>
+        <input type="text" id="c-city" data-expect="warn">
+      </div>
+      <button type="submit" id="submit-c">Submit</button>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(d) Error in a role="alert" region, script form with a type="button" button</h2>
+    <div id="form-d">
+      <div class="field">
+        <label for="d-phone">Phone</label>
+        <input type="tel" id="d-phone" data-expect="review">
+        <div role="alert" id="d-alert" class="error"></div>
+      </div>
+      <button type="button" id="submit-d">Send</button>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>(e) Focus moves to an error summary</h2>
+    <form id="form-e" novalidate>
+      <div id="e-summary-slot"></div>
+      <div class="field">
+        <label for="e-name">Full name</label>
+        <input type="text" id="e-name" data-expect="review">
+      </div>
+      <button type="submit" id="submit-e">Submit</button>
+    </form>
+  </div>
+
+  <div class="test-section">
+    <h2>(f) A required field: the browser's own validation blocks the submit</h2>
+    <form id="form-f">
+      <div class="field">
+        <label for="f-zip">ZIP code</label>
+        <input type="text" id="f-zip" required data-expect="review">
+      </div>
+      <button type="submit" id="submit-f">Submit</button>
+    </form>
+  </div>
+
+  <script>
+    const empty = (id) => !document.getElementById(id).value.trim();
+
+    document.getElementById('form-a').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (empty('a-email')) {
+        document.getElementById('a-email').setAttribute('aria-invalid', 'true');
+        document.getElementById('a-email-error').textContent = 'Enter your email address, for example name@example.com.';
+      }
+    });
+
+    document.getElementById('form-b').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (empty('b-first')) document.getElementById('b-first-msg').textContent = 'Enter your first name.';
+    });
+
+    document.getElementById('form-c').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (empty('c-city')) document.getElementById('c-city').classList.add('is-invalid');
+    });
+
+    // A script form: no <form>, no submit event.
+    document.getElementById('submit-d').addEventListener('click', () => {
+      if (empty('d-phone')) document.getElementById('d-alert').textContent = 'Phone number is required.';
+    });
+
+    document.getElementById('form-e').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!empty('e-name')) return;
+      const summary = document.createElement('div');
+      summary.className = 'summary';
+      summary.id = 'e-summary';
+      summary.tabIndex = -1;
+      summary.innerHTML = '<h3>There is a problem</h3><ul><li><a href="#e-name">Enter your full name</a></li></ul>';
+      document.getElementById('e-summary-slot').replaceChildren(summary);
+      summary.focus();
+    });
+
+    // Only reached when the field is valid: the browser blocks it otherwise.
+    document.getElementById('form-f').addEventListener('submit', (e) => e.preventDefault());
+  </script>
+</body>
+</html>

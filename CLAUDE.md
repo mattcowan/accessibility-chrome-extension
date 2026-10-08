@@ -34,7 +34,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   per-tab (after navigating, the toolbar icon must be clicked to re-grant).
 - `checkers/*.js` — injected as CLASSIC scripts (not modules) into the page's isolated
   world. Injection order: `checkers/lib/selector.js`, `checkers/lib/findings.js`,
-  (optional `overlay.js` / `accname.js` / `mechanism.js`), then the checker file.
+  (optional `overlay.js` / `accname.js` / `mechanism.js` / `forms.js` / `live.js`), then the checker file.
   `checkers/lib/resolve.js` (`__a11yResolve`) is the exact inverse of selector.js's
   `" >>> "` shadow-path format — used by the popup's click-a-finding reveal /
   highlight-all; keep the two formats consistent. `checkers/live-regions.js` is a
@@ -90,6 +90,47 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   popup warns instead of showing a silent empty pass), then dispatches one `__a11y-audio-rec` per record ON the
   media element (the event target crosses worlds; the detail is a JSON string, since
   only primitives cross).
+- `checkers/lib/live.js` (`__a11yLive`: `REGION_SELECTOR`, `politenessFor`,
+  `regionOf`) — live-region detection shared by `live-regions.js`, `error-capture.js`
+  and `input-watcher.js`. `checkers/lib/forms.js` (`__a11yForms`, needs `accname.js`)
+  — field selector, radio/checkbox group members, group label (fieldset legend or
+  named group/radiogroup holding every member), table headers (`headers` attr, else
+  `th` in the same row/column on a rowspan/colspan-aware grid), a field's own
+  container and the visible text near it. Shared by the three TT section 5 tools.
+- `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
+  batchable) — group with no group label is `fail`, `review` when a member has
+  aria-describedby (decided 2026-10-08); required-cue mismatch and repeated names are
+  `review`. One element can hit several rules, and the fingerprint is
+  `tool|wcag|selector`, so results are merged per element into ONE finding (max
+  severity, details joined). Repeated names: one finding per set, on its first field,
+  listing each field's headers/group label (context, never part of the name).
+- `checkers/error-capture.js` (3.3.1 / TT 5.F; quotes text for 3.3.3 / TT 5.G) —
+  stateful toggle (`start|stop|status|collect`, marker
+  `data-a11y-error-capture`, plus `data-a11y-error-captures=<n>` for E2E), top frame
+  only, watch-only. Baseline per field at start (the focused field is skipped — its
+  focus style would become its "normal"); a click on a button, Enter in a field,
+  `submit` or `invalid` opens a window that closes when the DOM is quiet. A field
+  keeps its earlier result unless the new window changed it (otherwise submitting
+  form B would erase form A's announcement cue). Color-only (no text) = `warn`, all
+  else `review`. Results live page-side; after each window the page posts
+  `{type:'errorCaptureUpdate', findings}` (the SW ignores it via `PAGE_NOTICES`; the
+  popup/panel stores it); a popup opened later reads them with `collect`.
+- `checkers/input-watcher.js` (3.2.2 / TT 5.D and 4.1.2 / TT 5.E) — stateful toggle,
+  marker `data-a11y-input-watcher`, top frame only, watch-only, never attaches the
+  debugger (no listener read). A navigation ends the page script, so the LOG LIVES IN
+  THE SW's `chrome.storage.session` key `watch:${tabId}`
+  (`{active, startedAt, last, events}`): the page sends `inputWatch` `mark` on each
+  field input/change, `unmark` on a click elsewhere or Enter, and `event` for what it
+  sees itself (script focus move = focusin with no Tab/arrow key in 150 ms and not the
+  clicked element or its label's control; content shown = not rendered at the
+  field's focusin, rendered at window end; submit with no Enter/submit click). The SW
+  logs `navigation` (`tabs.onUpdated` loading) and `new-tab` (`tabs.onCreated`
+  `openerTabId`) within 5 s of a mark, serialized per tab. The popup turns the log
+  into findings (`syncWatchFindings`: one per field per criterion) on refresh, on
+  start/stop and on each `watch:` events-count change, MERGED with the report's
+  existing input-watcher findings, and each finding carries the url of the page the
+  field was on. Stop clears the log; after a navigation the button reads "Resume
+  watcher" and starting again continues the log.
 - `test-pages/*.html` — deliberate-defect fixtures. Every defect element carries a
   `data-expect="fail|warn|review|pass"` attribute; the E2E verify script asserts
   against these. Self-contained inline CSS/JS is intentional — ignore inline-style
@@ -105,7 +146,8 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   return values. Async checkers may return a Promise (executeScript awaits it).
 - **Findings schema** (shared with the scanner; both CSV writers must stay in sync):
   `{tool, wcag, severity: fail|warn|review, selector, snippet, details, url,
-  timestamp, status}`. Popup stamps url/timestamp/status. Severity semantics:
+  timestamp, status}`. Popup stamps url/timestamp/status (url only when the finding
+  carries none — Input watcher findings keep the page the field was on). Severity semantics:
   `review` = heuristic couldn't verify, human must check — grade honestly, never
   upgrade uncertain findings to `fail`.
 - **Diff fingerprint** is `tool|wcag|selector` against `chrome.storage.local`
@@ -117,7 +159,11 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `hoverProbe {action: start|move|escape|end}`, `recordAudio` (→ `{ok, loaded}` after
   the reload finishes), `clickListeners` (→ `{ok, paths: [{path, tag}], truncated}`;
   attaches, reads, releases; refused during Reload and record; any CDP error other
-  than "node gone" fails the whole read → `ok:false`), `resetTab`; Reload and record,
+  than "node gone" fails the whole read → `ok:false`), `inputWatch {action:
+  start|stop|status}` from the popup and `{action: mark|unmark|event}` from the
+  watcher's content script (top frame, tab from `sender.tab`), `resetTab`. Pages also
+  post `errorCaptureUpdate` (a `PAGE_NOTICES` type: the SW returns false and never
+  answers it; popup/panel consume it). Reload and record,
   `clickListeners` and the hover probe (start→end) take an in-memory per-tab
   **debugger hold** (`holdDebugger`/`releaseDebugger` in debugger-manager.js; the
   hover probe uses `holdHover`/`touchHover`/`releaseHover` — one slot per tab, not a
@@ -185,13 +231,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 123/123 on 2026-10-08 (58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 186/186 on 2026-10-08 (123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
   `chrome.runtime.sendMessage` and `chrome.scripting` from that page. It asserts against
-  `data-expect` in test-pages. It covers motion 2.B, audio, Reload and record, and the
-  batch runner; older checkers have no section yet — **extend it with each new checker**
+  `data-expect` in test-pages. It covers motion 2.B, audio, Reload and record, the
+  batch runner, keyboard access, the focus locator, and the TT section 5 tools (form
+  labels, error capture, input watcher — the test plays the tester with real
+  clicks/keys/selects); older checkers have no section yet — **extend it with each new checker**
   (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
   `data-expect-blocked`, `data-expect-recorded`): launch twice, with
   `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
