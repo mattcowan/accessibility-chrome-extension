@@ -176,13 +176,23 @@ export async function detachIfIdle(tabId) {
 // would orphan its hold and keep the infobar up for good; so a hover hold
 // lapses when no hover message arrived for HOVER_HOLD_STALE_MS. A running
 // probe sends one about every second.
+//
+// The hover hold is one slot per tab, not a count: a lapsed hold must not
+// survive into the next probe (an orphan's count would keep the next probe's
+// 'end' from detaching). Two probes on one tab at once are not meaningful;
+// they would fight over the same mouse.
+//
+// A lapse detaches nothing by itself: the detach happens on the next
+// emulation change or hold release. A timer is not reliable in an MV3 SW, and
+// chrome.alarms needs a new permission. Before holds existed, an orphaned
+// probe kept the debugger attached too.
 const HOVER_HOLD_STALE_MS = 15000;
-const debuggerHolds = new Map(); // tabId -> {calls, hovers, lastHover}
+const debuggerHolds = new Map(); // tabId -> {calls, hover, lastHover}
 
 function holdsFor(tabId) {
   let h = debuggerHolds.get(tabId);
   if (!h) {
-    h = { calls: 0, hovers: 0, lastHover: 0 };
+    h = { calls: 0, hover: false, lastHover: 0 };
     debuggerHolds.set(tabId, h);
   }
   return h;
@@ -191,14 +201,14 @@ function holdsFor(tabId) {
 function hasActiveHold(tabId) {
   const h = debuggerHolds.get(tabId);
   if (!h) return false;
-  return h.calls > 0 || (h.hovers > 0 && Date.now() - h.lastHover < HOVER_HOLD_STALE_MS);
+  return h.calls > 0 || (h.hover && Date.now() - h.lastHover < HOVER_HOLD_STALE_MS);
 }
 
-// Detach if this was the last active hold and no emulation is on. Returns the
-// tab state after it.
+// Detach if no active hold is left and no emulation is on. Returns the tab
+// state after it.
 async function afterRelease(tabId) {
   const h = debuggerHolds.get(tabId);
-  if (h && h.calls <= 0 && h.hovers <= 0) debuggerHolds.delete(tabId);
+  if (h && h.calls <= 0 && !h.hover) debuggerHolds.delete(tabId);
   return hasActiveHold(tabId) ? getTabState(tabId) : detachIfIdle(tabId);
 }
 
@@ -207,27 +217,27 @@ export function holdDebugger(tabId) {
 }
 
 export async function releaseDebugger(tabId) {
-  const h = holdsFor(tabId);
-  h.calls = Math.max(0, h.calls - 1);
+  const h = debuggerHolds.get(tabId);
+  if (h) h.calls = Math.max(0, h.calls - 1);
   return afterRelease(tabId);
 }
 
-// Hover probe: 'start' takes the hold, 'move'/'escape' keep it fresh, 'end'
-// releases it.
+// Hover probe: 'start' takes the slot (replacing a lapsed one), 'move' and
+// 'escape' keep it fresh, 'end' frees it.
 export function holdHover(tabId) {
   const h = holdsFor(tabId);
-  h.hovers++;
+  h.hover = true;
   h.lastHover = Date.now();
 }
 
 export function touchHover(tabId) {
   const h = debuggerHolds.get(tabId);
-  if (h && h.hovers > 0) h.lastHover = Date.now();
+  if (h && h.hover) h.lastHover = Date.now();
 }
 
 export async function releaseHover(tabId) {
-  const h = holdsFor(tabId);
-  h.hovers = Math.max(0, h.hovers - 1);
+  const h = debuggerHolds.get(tabId);
+  if (h) h.hover = false;
   return afterRelease(tabId);
 }
 

@@ -426,9 +426,16 @@ try {
       await send({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: 'reduce' });
       await new Promise((r) => setTimeout(r, 16000));
       await send({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: null });
-      return { afterOff: await tabState() };
+      const afterOff = await tabState();
+      // The lapsed hold must not survive into the next probe: a second probe
+      // run to 'end' (emulation off) detaches.
+      await send({ type: 'hoverProbe', action: 'start' });
+      const duringSecond = await tabState();
+      await send({ type: 'hoverProbe', action: 'end' });
+      return { afterOff, duringSecond, afterSecondEnd: await tabState() };
     }, tabId);
     check('[holds] orphaned hover hold lapses; emulation off then detaches', !orphan.afterOff, JSON.stringify(orphan));
+    check('[holds] a probe after a lapsed one detaches at its end', orphan.duringSecond && !orphan.afterSecondEnd, JSON.stringify(orphan));
 
     // The outline:none button is a 2.4.7 problem for Focus visibility, not 2.1.1.
     await clickAndWait(env, 'run-focus', /^focus-visibility: \d+ findings/);
