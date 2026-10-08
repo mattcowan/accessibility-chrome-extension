@@ -240,7 +240,11 @@ async function getStore() {
   return store;
 }
 
-async function storeToolFindings(tool, rawFindings) {
+// final: false for an incremental update of a running tool (Error capture,
+// Input watcher). Status and "resolved" are still computed against the last
+// finished run, but the history is not overwritten, so a finding found seconds
+// earlier in the same session stays "new". The tool's Stop writes it (final).
+async function storeToolFindings(tool, rawFindings, { final = true } = {}) {
   const url = tab.url;
   const now = new Date().toISOString();
   // A finding may carry its own url: the Input watcher logs a field on the
@@ -256,7 +260,7 @@ async function storeToolFindings(tool, rawFindings) {
   const resolved = [...prevMap.values()]
     .filter((f) => !currentSet.has(fingerprint(f)))
     .map((f) => ({ ...f, status: 'resolved', timestamp: now }));
-  await chrome.storage.local.set({ [histKey]: { findings: stamped } });
+  if (final) await chrome.storage.local.set({ [histKey]: { findings: stamped } });
 
   const store = await getStore();
   store.url = url;
@@ -514,7 +518,9 @@ function watchSentence(ev) {
   const named = (t) => `${t.selector}${t.name ? ` ("${clip(t.name, 60)}")` : ''}`;
   switch (ev.kind) {
     case 'navigation':
-      return `The page navigated or reloaded${ev.to ? ` to ${ev.to}` : ''}${via}.`;
+      // The SW cannot tell a field-caused navigation from the user's own
+      // reload, address-bar entry or Back/Forward in the same 5 s.
+      return `The page navigated or reloaded${ev.to ? ` to ${ev.to}` : ''}${via}, or the user reloaded or navigated within 5 seconds of the change. Check which.`;
     case 'new-tab':
       return `A new tab or window opened${ev.to ? ` (${ev.to})` : ''}${via}.`;
     case 'submit':
@@ -548,12 +554,19 @@ function watchFindings(events) {
     const wcag = WATCH_WCAG[ev.kind];
     if (!wcag || !ev.field) continue;
     const key = `${ev.field.selector}|${wcag}`;
-    if (!groups.has(key)) groups.set(key, { ev, wcag, sentences: new Map() });
-    const s = watchSentence(ev);
-    const g = groups.get(key);
-    g.sentences.set(s, (g.sentences.get(s) || 0) + 1);
+    if (!groups.has(key)) groups.set(key, { ev, wcag, events: [] });
+    groups.get(key).events.push(ev);
   }
-  return [...groups.values()].map(({ ev, wcag, sentences }) => {
+  // One finding per field and criterion (the diff fingerprint is
+  // tool|wcag|selector). When the same selector logged changes on more than
+  // one page, each sentence names its page; the url column has the first.
+  return [...groups.values()].map(({ ev, wcag, events: evs }) => {
+    const pages = new Set(evs.map((x) => x.field.url));
+    const sentences = new Map();
+    for (const x of evs) {
+      const s = watchSentence(x) + (pages.size > 1 ? ` (On ${x.field.url}.)` : '');
+      sentences.set(s, (sentences.get(s) || 0) + 1);
+    }
     const lines = [...sentences].map(([s, n]) => (n > 1 ? `${s} (${n} times)` : s));
     const name = ev.field.name ? ` ("${clip(ev.field.name, 60)}")` : '';
     return {
@@ -572,7 +585,8 @@ function watchFindings(events) {
 // restarted watcher starts a new log), and a field's finding from the log
 // replaces its older one.
 // state: the log to use (Stop passes the final one); else read from storage.
-async function syncWatchFindings(state) {
+// final: true only from Stop, which writes the run history.
+async function syncWatchFindings(state, { final = false } = {}) {
   if (!tab || restricted) return;
   if (state === undefined) {
     const key = `watch:${tab.id}`;
@@ -584,7 +598,7 @@ async function syncWatchFindings(state) {
   const existing = (store.tools['input-watcher'] && store.tools['input-watcher'].findings) || [];
   const fresh = new Set(derived.map(fingerprint));
   const kept = existing.filter((f) => !fresh.has(fingerprint(f)));
-  await storeToolFindings('input-watcher', [...kept, ...derived]);
+  await storeToolFindings('input-watcher', [...kept, ...derived], { final });
 }
 
 // ------------------------------------------------------------ checker wiring
@@ -595,8 +609,9 @@ async function syncWatchFindings(state) {
 // stylesheet, which would skew their measurements) and the slow hover probe
 // runs last. The stateful toggles (text-spacing apply/remove, accname
 // inspector, live-regions monitor, focus locator, error capture, input
-// watcher) are deliberately not batchable and stay outside the registry, as does audio's Reload and record
-// (it reloads the page, which would reset what the other checkers measure).
+// watcher) are deliberately not batchable and stay outside the registry, as
+// does audio's Reload and record (it reloads the page, which would reset
+// what the other checkers measure).
 const CHECKERS = [
   { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
     files: [...MECHANISM, 'checkers/motion-check.js'], fnName: 'motion', allFrames: true,
@@ -911,7 +926,7 @@ async function refreshErrorCaptureButton() {
     });
     const state = res.result;
     $('toggle-error-capture').textContent = state && state.active ? 'Stop capture' : 'Start capture';
-    if (state && state.captures) await storeToolFindings('error-capture', state.findings);
+    if (state && state.captures) await storeToolFindings('error-capture', state.findings, { final: false });
   } catch {
     // leave default label
   }
@@ -1084,7 +1099,7 @@ function wireCheckers() {
         );
       } else {
         const [res] = await callChecker('errorCapture', 'collect');
-        if (status.result.captures) await storeToolFindings('error-capture', res.result);
+        if (status.result.captures) await storeToolFindings('error-capture', res.result); // final
         await callChecker('errorCapture', 'stop');
         e.target.textContent = 'Start capture';
         announce('error capture: off.');
@@ -1120,7 +1135,7 @@ function wireCheckers() {
         // with the stop message, so it is in the final log.
         const [res] = await callChecker('inputWatcher', 'stop');
         const sw = await send({ type: 'inputWatch', action: 'stop', events: (res.result && res.result.events) || [] });
-        await syncWatchFindings(sw && sw.ok ? sw.state : undefined);
+        await syncWatchFindings(sw && sw.ok ? sw.state : undefined, { final: true });
         e.target.textContent = 'Start watcher';
         announce('input watcher: off. Its findings stay in the report.');
       }
@@ -1202,6 +1217,9 @@ function wireCheckers() {
     e.target.disabled = true;
     banner('');
     try {
+      // The SW log first: it needs no page access, so a failed injection
+      // below cannot leave it behind.
+      await send({ type: 'inputWatch', action: 'stop' });
       await inject([OVERLAY], true);
       await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
@@ -1219,12 +1237,24 @@ function wireCheckers() {
       await inject(LOCATOR_FILES);
       await callChecker('focusLocator', 'stop');
       $('toggle-focus-locator').textContent = 'Start locator';
-      await inject(ERROR_FILES);
-      await callChecker('errorCapture', 'stop');
+      // Error capture and the Input watcher: inject only when the page says
+      // one is running.
+      const [running] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => ({
+          error: document.documentElement.dataset.a11yErrorCapture === 'on',
+          watch: document.documentElement.dataset.a11yInputWatcher === 'on',
+        }),
+      });
+      if (running.result.error) {
+        await inject(ERROR_FILES);
+        await callChecker('errorCapture', 'stop');
+      }
       $('toggle-error-capture').textContent = 'Start capture';
-      await inject(WATCH_FILES);
-      await callChecker('inputWatcher', 'stop');
-      await send({ type: 'inputWatch', action: 'stop' });
+      if (running.result.watch) {
+        await inject(WATCH_FILES);
+        await callChecker('inputWatcher', 'stop');
+      }
       $('toggle-input-watcher').textContent = 'Start watcher';
       await clearFindingsStore();
       announce('Cleared overlays, spacing overrides, inspectors, and findings for this tab.');
@@ -1380,7 +1410,7 @@ async function init() {
       msg && msg.type === 'errorCaptureUpdate' && tab && !restricted &&
       sender.tab && sender.tab.id === tab.id && Array.isArray(msg.findings)
     ) {
-      storeToolFindings('error-capture', msg.findings).then(({ findings }) =>
+      storeToolFindings('error-capture', msg.findings, { final: false }).then(({ findings }) =>
         announce(`error capture: ${findings.length} field${findings.length === 1 ? '' : 's'} with an error so far`)
       );
     }

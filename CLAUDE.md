@@ -146,7 +146,13 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   into findings (`syncWatchFindings`: one per field per criterion) on refresh, on
   start/stop and on each `watch:` `seq` change, MERGED with the report's
   existing input-watcher findings, and each finding carries the url of the page the
-  field was on. Stop: the page returns its open window's events (a post could arrive
+  field was on. Incremental stores (each log entry, each Error capture window,
+  each popup refresh) pass `{final:false}` to `storeToolFindings`: status is
+  still computed against the last finished run, but history is written only by
+  each tool's Stop, so a finding stays `new` for the whole session. After a
+  navigation with no Resume, the log stays `active` until Stop, Clear all or tab
+  close; it is harmless leftover state, because only a running page script sends
+  the marks that link a later navigation to a field. Stop: the page returns its open window's events (a post could arrive
   after the stop), the popup sends them with `inputWatch stop`, and the SW logs them,
   returns the final log for the last sync, then clears it. After a navigation the button reads "Resume
   watcher" and starting again continues the log.
@@ -250,7 +256,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 205/205 on 2026-10-08 (123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 208/208 on 2026-10-08 (123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

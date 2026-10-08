@@ -672,6 +672,9 @@ try {
     const g = det('#g-code');
     check('[error-capture] (g) Enter in the field: focus that stays is not a focus move', /"Enter the promo code from your email."/.test(g) && !/Focus moved/.test(g) && /Cues missing:[^]*an announcement/.test(g), g);
     check('[error-capture] (g) a focus style is not counted as an error color', !/a color change/.test(g), g);
+    // Eight capture windows each pushed an incremental store; a fresh profile
+    // has no history, so every finding must still be "new".
+    check('[error-capture] incremental updates keep every finding "new"', f.length > 0 && f.every((x) => x.status === 'new'), JSON.stringify(f.map((x) => [x.selector, x.status])));
     check('[error-capture] every finding is 3.3.1', f.length > 0 && f.every((x) => x.wcag === '3.3.1'), JSON.stringify(f.map((x) => x.wcag)));
 
     // The popup re-syncs its label from the page.
@@ -736,6 +739,11 @@ try {
     if (newTab) await newTab.close();
     await page.bringToFront();
     await sleep(500);
+    // Before the navigation: the open popup has synced the log once per new
+    // entry on this page, and none of those incremental stores may turn a
+    // finding found seconds earlier into "existing".
+    const mid = await storedFindings(env, tabId, 'input-watcher');
+    check('[input-watcher] incremental syncs keep every finding "new"', mid.length >= 5 && mid.every((x) => x.status === 'new'), JSON.stringify(mid.map((x) => [x.selector, x.status])));
     const firstUrl = page.url();
     await Promise.all([page.waitForURL(/country=ca/), page.selectOption('#country', 'ca')]); // (a)
     await page.waitForLoadState('load');
@@ -801,7 +809,11 @@ try {
     await env.popup.waitForFunction(() => /^input watcher: off/.test(document.getElementById('status').textContent));
     const f3 = await storedFindings(env, tabId, 'input-watcher');
     const ship = (f3.find((x) => x.selector === '#ship-other' && x.wcag === '4.1.2') || {}).details || '';
-    check('[input-watcher] Stop right after a change keeps the effect of the open window', /#other-address[^]*\(2 times\)/.test(ship), ship);
+    // The same field logged changes on two pages: one finding (one
+    // fingerprint), each sentence naming its page. The q=abc one is the
+    // window that was still open at Stop.
+    check('[input-watcher] Stop right after a change keeps the effect of the open window', /#other-address[^]*\(On [^ ]*form-input\.html\?q=abc\.\)/.test(ship), ship);
+    check('[input-watcher] changes on two pages: one finding, both pages named', /\(On [^ ]*form-input\.html\.\)/.test(ship) && f3.filter((x) => x.selector === '#ship-other' && x.wcag === '4.1.2').length === 1, ship);
     // Start again to test that Stop removes everything.
     await clickAndWait(env, 'toggle-input-watcher', /^input watcher: on/);
     // Stop removes everything the watcher added, and its SW log; the findings stay.
