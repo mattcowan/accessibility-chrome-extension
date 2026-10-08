@@ -33,6 +33,8 @@ keyboard-trap scanner.
 | Audio autoplay | 1.4.2 (TT 2.A) | Reports unmuted audio longer than 3 seconds that **plays now**, or that **would play** (an autoplay element the browser's autoplay policy kept paused), plus embeds that request autoplay. Looks for a pause/stop/volume control within the first three elements (`review` if found, `warn` if elsewhere, `fail` if none). If Chrome marks the tab as audible but no page element explains it (Web Audio, cross-origin iframes), it adds a page-level `review`. **Reload and record** reloads the page with a recorder that catches audio scripts start, including attempts the browser blocked |
 | Text spacing | 1.4.12 | Applies the standard spacing overrides, then flags **newly** clipped text (pre-existing clipping is baselined out) |
 | Focus visibility | 2.4.7 | Badges tab order; flags focusables with no detectable focus indicator (style-diff + CSSOM `:focus`/`:focus-visible` analysis, confidence-graded) |
+| Focus locator | 2.4.7 / 2.1.1 (TT 4.D vs 4.A) | A start/stop tool for manual Tab testing. While you press Tab or Shift+Tab, it draws a dashed box around the element that has focus and shows its role and name. It follows focus into open shadow roots and same-origin iframes. The label says whether the **page** shows a focus indicator on that element: an outline or ring, a subtle change only, a change on the parent or a `::before`/`::after`, or nothing. "Nothing" is a 4.D failure (2.4.7), not 4.A: focus did reach the element. The label also tells you when focus came from a mouse click, when the focused element is hidden or off-screen, and when focus is in a cross-origin frame. It only watches. It does not move focus, press keys, or click |
+| Keyboard access | 2.1.1 (TT 4.A) | Reports elements that a mouse can operate but Tab cannot reach. An element is a candidate when it sets a pointer cursor, has an `onclick`-type attribute or an interactive `role`, or has a click listener. It is reported only if it is not focusable and not inside a focusable element. Items in a composite widget that arrow keys reach (roving `tabindex`, `aria-activedescendant`) are not reported. Every finding is `review`: Trusted Tester 4.A accepts another keyboard method for the same function, and you must look for it. The scan reads click listeners through the debugger, so the debugging bar shows for a moment. It does not test Enter or Space activation (TT 4.A step 2). Do that step by hand |
 | Target size | 2.5.8 | Flags interactive targets under 24×24 px, with the spacing and inline exceptions approximated |
 | Hover/focus content | 1.4.13 + title triage | Triages `title` tooltips (exempt from 1.4.13 as user-agent-controlled): redundant titles → `warn`, titles carrying unique info → `review` under 2.4.4/1.3.1, title-as-only-label fields → `review` under 3.3.2. Separately discovers CSS reveal-on-hover/focus content, triggers it with **real** CDP mouse events, and tests Escape dismissability (author-built tooltips do fail 1.4.13) |
 | Reflow scan | 1.4.10 | With the 320 px override on, reports elements that force horizontal scrolling (tables/images/code flagged for review, not failure) |
@@ -54,7 +56,7 @@ sessions. Notes:
   so they can't skew other checkers (running it from its own button leaves them
   applied, as before).
 - The stateful tools (text-spacing apply/remove, accname inspector, live-regions
-  monitor) are not batchable. Neither is audio's **Reload and record**, because it
+  monitor, focus locator) are not batchable. Neither is audio's **Reload and record**, because it
   reloads the page.
 
 ### Report
@@ -68,7 +70,7 @@ sessions. Notes:
   inside iframes, the highlight lands in the iframe and scrolling happens within it.
 - **Export CSV** (Excel-safe RFC 4180). A two-line header names the run URL and export time, then columns: tool, wcag, severity, selector, snippet, details, url, timestamp, status.
 - **Run-over-run diff**: re-running a checker marks each finding `new` or `existing` and reports `resolved` ones, persisted per URL+tool across browser restarts.
-- **Clear all checkers** resets everything in one click — removes on-page artifacts (overlay badges, text-spacing overrides, the accname inspector) and clears the tab's findings. **Clear overlays** and **Clear findings** remain for granular resets.
+- **Clear all checkers** resets everything in one click — removes on-page artifacts (overlay badges, text-spacing overrides, the accname inspector, the focus locator) and clears the tab's findings. **Clear overlays** and **Clear findings** remain for granular resets.
 
 ### Side panel
 
@@ -107,6 +109,22 @@ it. Consequences:
 - Closed shadow roots are invisible to all checkers.
 - Focus-indicator detection is heuristic: synthetic focus may not trigger `:focus-visible`,
   and cross-origin stylesheets can't be read — such findings are downgraded to `review`.
+- The focus locator compares the focused element with its unfocused style. It records
+  that style when you start it, when an element is added to the page, and each time
+  an element loses focus. Some elements have no record when they first get focus: an
+  element that gets focus at the moment it is added (for example, the first control
+  in a dialog), and an element that loads later inside a frame or a shadow root. For
+  these, the verdict says that the comparison is not available. Tab away and back to
+  get a full verdict. The locator does not see indicators drawn on elements other than
+  the focused element, its parent, and its `::before`/`::after`.
+- The keyboard access scan cannot tell which element a delegated listener serves (one
+  listener on `<body>` or on a container, such as the React 17+ root). It ignores
+  listeners on `<html>` and `<body>`. It also ignores a container when the listener is
+  its only signal and it holds a focusable element. A listener-only container with
+  nothing focusable inside is still reported. A listener-only card with no pointer
+  cursor is not reported if it holds a link, even if that link does something else.
+  Click listeners inside iframes are not read; the other signals still apply there. If DevTools is open on the tab, the scan cannot read listeners and adds
+  a page-level `review` that says so.
 - The hover checker only discovers CSS-rule-based reveals (`:hover`/`:focus` toggling
   display/visibility/opacity); JS-driven tooltips are not probed.
 - The accessible-name computation is a simplified subset of the AccName algorithm.

@@ -162,11 +162,103 @@ export async function detachIfIdle(tabId) {
   return defaultTabState();
 }
 
+// Transient debugger users on a tab (hover probe start→end, the click-listener
+// read, Reload and record). Each holds the session while it works; the
+// debugger detaches only when no hold is left AND no emulation is on, so
+// neither one user's cleanup nor an emulation toggle can detach another user
+// mid-way (the popup and the side panel can both drive one tab).
+// In memory, unlike tab state: if the SW dies, the holds die with it, and the
+// worst case is the old behavior (an early detach).
+//
+// Two kinds. The listener read and Reload and record run inside one SW call
+// with a finally, so their `calls` count always comes back down. The hover
+// probe spans many popup messages, and a popup that closes before 'end'
+// would orphan its hold and keep the infobar up for good; so a hover hold
+// lapses when no hover message arrived for HOVER_HOLD_STALE_MS. A running
+// probe sends one about every second.
+//
+// The hover hold is one slot per tab, not a count: a lapsed hold must not
+// survive into the next probe (an orphan's count would keep the next probe's
+// 'end' from detaching). Two probes on one tab at once are not meaningful;
+// they would fight over the same mouse.
+//
+// A lapse detaches nothing by itself: the detach happens on the next
+// emulation change or hold release. A timer is not reliable in an MV3 SW, and
+// chrome.alarms needs a new permission. Before holds existed, an orphaned
+// probe kept the debugger attached too.
+const HOVER_HOLD_STALE_MS = 15000;
+const debuggerHolds = new Map(); // tabId -> {calls, hover, lastHover}
+
+function holdsFor(tabId) {
+  let h = debuggerHolds.get(tabId);
+  if (!h) {
+    h = { calls: 0, hover: false, lastHover: 0 };
+    debuggerHolds.set(tabId, h);
+  }
+  return h;
+}
+
+function hasActiveHold(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (!h) return false;
+  return h.calls > 0 || (h.hover && Date.now() - h.lastHover < HOVER_HOLD_STALE_MS);
+}
+
+// Detach if no active hold is left and no emulation is on. Returns the tab
+// state after it.
+async function afterRelease(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (h && h.calls <= 0 && !h.hover) debuggerHolds.delete(tabId);
+  return hasActiveHold(tabId) ? getTabState(tabId) : detachIfIdle(tabId);
+}
+
+export function holdDebugger(tabId) {
+  holdsFor(tabId).calls++;
+}
+
+export async function releaseDebugger(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (h) h.calls = Math.max(0, h.calls - 1);
+  return afterRelease(tabId);
+}
+
+// Hover probe: 'start' takes the slot (replacing a lapsed one), 'move' and
+// 'escape' keep it fresh, 'end' frees it.
+export function holdHover(tabId) {
+  const h = holdsFor(tabId);
+  h.hover = true;
+  h.lastHover = Date.now();
+}
+
+export function touchHover(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (h && h.hover) h.lastHover = Date.now();
+}
+
+export async function releaseHover(tabId) {
+  const h = debuggerHolds.get(tabId);
+  if (h) h.hover = false;
+  return afterRelease(tabId);
+}
+
+// Nothing is attached any more (external detach, tab closed), so no hold can
+// be honored.
+export function clearHolds(tabId) {
+  debuggerHolds.delete(tabId);
+}
+
 // Single entry point for all popup-driven state changes.
 export async function updateTabState(tabId, mutate) {
   const state = await getTabState(tabId);
   mutate(state);
   if (isAllOff(state)) {
+    if (state.attached && hasActiveHold(tabId)) {
+      // A hold-taker is mid-way: clear the overrides but stay attached. The
+      // last releaseDebugger detaches (detachIfIdle sees all-off).
+      await applyState(tabId, state).catch(() => {});
+      await saveTabState(tabId, state);
+      return { ok: true, state };
+    }
     if (state.attached) await detachDebugger(tabId);
     await clearTabState(tabId);
     return { ok: true, state: defaultTabState() };
@@ -200,6 +292,87 @@ export async function addScriptOnNewDocument(tabId, source) {
 
 export async function removeScriptOnNewDocument(tabId, identifier) {
   await sendCommand(tabId, 'Page.removeScriptToEvaluateOnNewDocument', { identifier });
+}
+
+// --- Click listeners for the mouse-only scan (2.1.1 / TT 4.A) ---------------
+// Content scripts cannot see addEventListener listeners; CDP can. Returns
+// {path, tag} for every element that has a click-type listener: the
+// child-index path from the top document (-1 = enter the shadow root), for
+// the checker in the page to resolve, and the tag name it checks against.
+// Known gaps: nodes inside iframes return no path, and a path through a
+// CLOSED shadow root does not resolve in the page (shadowRoot is null).
+
+const CLICK_TYPES = new Set(['click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup']);
+const LISTENER_NODE_CAP = 500;
+const LISTENER_GROUP = 'a11y-click-listeners';
+// CDP errors for a node or object that no longer exists. "Cannot find
+// context" is deliberately not here: it means the page navigated, and paths
+// read before that point would be resolved against the new page.
+const NODE_GONE = /No node with given id|Could not find (node|object) with given id/i;
+
+// Runs in the page's main world with `this` = the element. No page code is
+// called, and no gesture is passed (Runtime.callFunctionOn defaults to none).
+const PATH_FN = `function () {
+  if (window !== window.top) return null;
+  const path = [];
+  let node = this;
+  while (node && node !== document) {
+    const parent = node.parentNode;
+    if (!parent || !parent.children) return null;
+    let i = 0;
+    while (i < parent.children.length && parent.children[i] !== node) i++;
+    if (i === parent.children.length) return null;
+    path.unshift(i);
+    if (parent.nodeType === 11) {
+      path.unshift(-1);
+      node = parent.host;
+    } else {
+      node = parent;
+    }
+  }
+  return node === document ? { path: path, tag: this.tagName } : null;
+}`;
+
+export async function clickListenerPaths(tabId) {
+  try {
+    const { result: doc } = await sendCommand(tabId, 'Runtime.evaluate', {
+      expression: 'document',
+      objectGroup: LISTENER_GROUP,
+    });
+    const { listeners } = await sendCommand(tabId, 'DOMDebugger.getEventListeners', {
+      objectId: doc.objectId,
+      depth: -1,
+      pierce: true,
+    });
+    const ids = [
+      ...new Set(
+        listeners.filter((l) => CLICK_TYPES.has(l.type) && l.backendNodeId).map((l) => l.backendNodeId)
+      ),
+    ];
+    const paths = [];
+    for (const backendNodeId of ids.slice(0, LISTENER_NODE_CAP)) {
+      try {
+        const { object } = await sendCommand(tabId, 'DOM.resolveNode', {
+          backendNodeId,
+          objectGroup: LISTENER_GROUP,
+        });
+        const { result } = await sendCommand(tabId, 'Runtime.callFunctionOn', {
+          objectId: object.objectId,
+          functionDeclaration: PATH_FN,
+          returnByValue: true,
+        });
+        if (result.value && Array.isArray(result.value.path)) paths.push(result.value);
+      } catch (e) {
+        // Only a node that went away between the calls is skipped. Anything
+        // else (the session detached, the tab closed) fails the whole read,
+        // so a partial list is never reported as complete.
+        if (!NODE_GONE.test(e && e.message)) throw e;
+      }
+    }
+    return { paths, truncated: ids.length > LISTENER_NODE_CAP };
+  } finally {
+    await sendCommand(tabId, 'Runtime.releaseObjectGroup', { objectGroup: LISTENER_GROUP }).catch(() => {});
+  }
 }
 
 // --- Input dispatch for the hover/focus-content (1.4.13) probe -------------

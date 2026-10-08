@@ -43,6 +43,33 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   DOM marker, its log entries live page-side in the checker closure and are
   **intentionally outside** the findings schema/diff (events, not defects — only the
   one-review-finding-per-region summary goes through `storeToolFindings`).
+- `checkers/lib/focus-style.js` (`__a11yFocusStyle`) — the focus-indicator style
+  diff (`snap`/`diffKind`/`deepActiveElement`) shared by `focus-walker.js` (2.4.7,
+  synthetic focus) and `focus-locator.js`.
+- `checkers/focus-locator.js` — stateful toggle (`start|stop|status`, DOM marker
+  `data-a11y-focus-locator`), top frame only. It never focuses/blurs/presses keys: a
+  rAF loop reads the deep active element through open shadow roots and into
+  same-origin iframes (`contentDocument`) and draws on its OWN fixed layer
+  (`#__a11y-focus-locator`, put in the top layer via `popover="manual"` so it shows
+  above modal dialogs; a `<style>` inside the layer neutralizes the page's
+  `::backdrop` rules, which would otherwise dim the page) — not overlay.js, whose
+  layer is static-positioned and wiped by
+  **Clear overlays**. The 4.D verdict diffs the real-focus computed style against an
+  unfocused baseline taken at start, on insertion (a MutationObserver per watched
+  document — it does not see into shadow roots attached later), and on every
+  `focusout`; real Tab focus matches
+  `:focus-visible`, so no CSSOM fallback is needed here. Every verdict on an element
+  says "Focus is here" — that is the whole point (4.D ≠ 4.A). The layer exposes
+  `data-verdict`/`data-target`/`data-stop` for E2E.
+- `checkers/keyboard-access.js` (2.1.1 / TT 4.A, always `review`) — registry
+  `kind: 'keyboard'`: `execKeyboardAccess` first sends `clickListeners` (the SW reads
+  `DOMDebugger.getEventListeners` depth −1/pierce and returns child-index paths, −1 =
+  enter shadow root, top document only), then runs the checker allFrames with
+  `{listenerPaths}`. Listeners on html/body are ignored (delegation), and so is a
+  candidate whose ONLY signal is a listener when it holds a tabbable element (React
+  17+ root, jQuery containers — decided 2026-10-07; cursor/onclick/role still report
+  cards). If the SW call
+  fails (DevTools open), one `(page)` review says what was not covered.
 - `checkers/lib/mechanism.js` (`__a11yMechanism`, needs `accname.js`) — finds a
   pause/stop/hide/volume control for auto-playing content and applies the Trusted
   Tester location rule: 2.A = first three elements only; 2.B (and later 2.C) = first
@@ -88,7 +115,17 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `setVisionDeficiency`, `setReflow {value: false|'320'|'320zoom'}` ('320zoom' adds
   `scale: 4` to the viewport override — same 320px layout, 400%-zoom rendering),
   `hoverProbe {action: start|move|escape|end}`, `recordAudio` (→ `{ok, loaded}` after
-  the reload finishes), `resetTab`; SW broadcasts
+  the reload finishes), `clickListeners` (→ `{ok, paths: [{path, tag}], truncated}`;
+  attaches, reads, releases; refused during Reload and record; any CDP error other
+  than "node gone" fails the whole read → `ok:false`), `resetTab`; Reload and record,
+  `clickListeners` and the hover probe (start→end) take an in-memory per-tab
+  **debugger hold** (`holdDebugger`/`releaseDebugger` in debugger-manager.js; the
+  hover probe uses `holdHover`/`touchHover`/`releaseHover` — one slot per tab, not a
+  count, so a lapsed hold cannot outlive the next probe — and its hold lapses after
+  15 s with no hover message, so a popup closed mid-probe cannot pin it). The
+  debugger detaches only when no hold is left and no emulation is on: the last
+  release runs `detachIfIdle`, and `updateTabState`'s all-off branch clears the
+  overrides but stays attached while a hold exists; SW broadcasts
   `stateChanged {tabId, state, reason}`.
 - **Intentional duplication:** `checkers/lib/selector.js`+`findings.js` vs
   `tools/keyboard-trap-scan/lib/focusables.js`, and `popup/csv.js` vs
@@ -147,14 +184,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
-- **E2E:** the verify script pattern lives in the session-scratchpad `verify.mjs`
-  (technique documented in project memory `ext-e2e-verify-technique`): stage a copy of
-  the extension with `host_permissions: ["<all_urls>"]` added, launch
-  `chromium.launchPersistentContext` with `--load-extension`, open
-  `chrome-extension://<id>/popup/popup.html` in a tab, and drive `chrome.runtime.sendMessage`
-  / `chrome.scripting` from that page. Run it from `tools/keyboard-trap-scan/` so
-  `playwright` resolves. Assert against `data-expect` in test-pages. Was 30/30 at build.
-  Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
+- **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 123/123 on 2026-10-08 (58 before #20). It stages
+  a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
+  folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
+  `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
+  `chrome.runtime.sendMessage` and `chrome.scripting` from that page. It asserts against
+  `data-expect` in test-pages. It covers motion 2.B, audio, Reload and record, and the
+  batch runner; older checkers have no section yet — **extend it with each new checker**
+  (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
   `data-expect-blocked`, `data-expect-recorded`): launch twice, with
   `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
   (Playwright sets no autoplay flag by default). Under Playwright,

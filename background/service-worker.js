@@ -75,6 +75,9 @@ async function handle(msg) {
     case 'recordAudio':
       return handleRecordAudio(tabId);
 
+    case 'clickListeners':
+      return handleClickListeners(tabId);
+
     case 'resetTab': {
       const res = await dbg.updateTabState(tabId, (s) => Object.assign(s, dbg.defaultTabState()));
       broadcast(tabId, res.state);
@@ -86,29 +89,63 @@ async function handle(msg) {
   }
 }
 
+// Debugger holds (see debugger-manager.js) for the click-listener read and
+// Reload and record. The hover probe uses holdHover/touchHover/releaseHover.
+function holdDebugger(tabId) {
+  dbg.holdDebugger(tabId);
+}
+
+async function releaseDebugger(tabId) {
+  const state = await dbg.releaseDebugger(tabId);
+  broadcast(tabId, state);
+  return state;
+}
+
 // The 1.4.13 checker needs real hover + Escape input. The popup orchestrates:
 // start (attach if needed) -> move/escape per candidate -> end (detach if no
-// emulation is otherwise active, so the infobar doesn't linger).
+// emulation or other debugger user is active, so the infobar doesn't linger).
 async function handleHoverProbe(msg) {
   const { tabId, action } = msg;
   switch (action) {
     case 'start': {
       const res = await dbg.ensureAttached(tabId);
+      if (res.ok) dbg.holdHover(tabId);
       return res.ok ? { ok: true } : { ok: false, error: res.error };
     }
     case 'move':
+      dbg.touchHover(tabId);
       await dbg.dispatchMouseMove(tabId, msg.x, msg.y);
       return { ok: true };
     case 'escape':
+      dbg.touchHover(tabId);
       await dbg.dispatchEscape(tabId);
       return { ok: true };
     case 'end': {
-      const state = await dbg.detachIfIdle(tabId);
+      const state = await dbg.releaseHover(tabId);
       broadcast(tabId, state);
       return { ok: true, state };
     }
     default:
       return { ok: false, error: `Unknown hoverProbe action: ${action}` };
+  }
+}
+
+// The mouse-only scan (2.1.1) needs the page's click listeners, which only
+// CDP can read. Attach, read, then detach again if nothing else needs the
+// debugger. Refused during Reload and record: the page is reloading, so the
+// listeners read would belong to a page that is going away.
+async function handleClickListeners(tabId) {
+  if (recordingTabs.has(tabId)) {
+    return { ok: false, error: 'Reload and record is running on this tab' };
+  }
+  holdDebugger(tabId);
+  try {
+    const attach = await dbg.ensureAttached(tabId);
+    if (!attach.ok) return { ok: false, error: attach.error };
+    const { paths, truncated } = await dbg.clickListenerPaths(tabId);
+    return { ok: true, paths, truncated };
+  } finally {
+    await releaseDebugger(tabId);
   }
 }
 
@@ -157,23 +194,25 @@ async function handleRecordAudio(tabId) {
 }
 
 async function recordAudioCycle(tabId) {
-  const attach = await dbg.ensureAttached(tabId);
-  if (!attach.ok) return { ok: false, error: attach.error };
+  holdDebugger(tabId);
   let scriptId = null;
   try {
+    const attach = await dbg.ensureAttached(tabId);
+    if (!attach.ok) return { ok: false, error: attach.error };
     scriptId = await dbg.addScriptOnNewDocument(tabId, AUDIO_HOOK_SOURCE);
     const reloaded = waitForReload(tabId, RECORD_LOAD_TIMEOUT_MS);
     await chrome.tabs.reload(tabId);
     return { ok: true, loaded: await reloaded };
   } finally {
     if (scriptId) await dbg.removeScriptOnNewDocument(tabId, scriptId).catch(() => {});
-    broadcast(tabId, await dbg.detachIfIdle(tabId));
+    await releaseDebugger(tabId);
   }
 }
 
 // Detached externally: infobar "x" clicked, DevTools attached, target crashed.
 chrome.debugger.onDetach.addListener(async (source, reason) => {
   if (!source.tabId) return;
+  dbg.clearHolds(source.tabId);
   await dbg.clearTabState(source.tabId);
   broadcast(
     source.tabId,
@@ -185,6 +224,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  dbg.clearHolds(tabId);
   await dbg.clearTabState(tabId);
   await chrome.storage.session.remove(`findings:${tabId}`);
 });

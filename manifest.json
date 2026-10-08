@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Accessibility Modes & Checkers",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Emulate accessibility media features and vision deficiencies per-tab; run WCAG checkers; export findings to CSV.",
   "minimum_chrome_version": "120",
   "permissions": ["debugger", "scripting", "activeTab", "storage", "sidePanel", "tabs"],
