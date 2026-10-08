@@ -1,7 +1,8 @@
 // Finds a user mechanism (pause / stop / hide / volume control) for
 // auto-playing content and checks it against the Trusted Tester location
 // rules. Injected (classic script) after selector.js, findings.js and
-// accname.js; used by the motion (TT 2.B) and audio (TT 2.A) checkers.
+// accname.js; used by the motion (TT 2.B), audio (TT 2.A) and auto-update
+// (TT 2.C) checkers.
 //
 // TT 2.A: the mechanism must be within the first three elements encountered.
 // TT 2.B / 2.C: within the first three elements OR within three elements
@@ -27,6 +28,13 @@ if (!globalThis.__a11yMechanism) {
       // Moving content: pause, stop, or hide it. Muting is not a mechanism.
       '2.B': {
         verbs: /\b(pause|stop|play|hide|freeze)\b/i,
+        nearby: true,
+      },
+      // Auto-updating content: pause, stop, or hide it, or set how often it
+      // updates (a close button hides a ticker; a "speed" or "auto-rotate"
+      // control sets the frequency).
+      '2.C': {
+        verbs: /\b(pause|stop|play|hide|freeze|close|dismiss|frequency|speed|interval|auto-?(play|refresh|update|rotate|scroll|advance))\b/i,
         nearby: true,
       },
     };
@@ -137,29 +145,43 @@ if (!globalThis.__a11yMechanism) {
       return (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim();
     }
 
+    // aria-controls on `el` names the target, an element that holds it (a
+    // "pause all" for a section), or an element inside it (a carousel's
+    // controls name its slide track, which may be inside the changing region).
     function controlsTarget(el, target) {
       const ids = (el.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean);
-      return !!target.id && ids.includes(target.id);
+      if (target.id && ids.includes(target.id)) return true;
+      const root = target.getRootNode();
+      return ids.some((id) => {
+        const c = root.getElementById ? root.getElementById(id) : null;
+        return !!c && (c === target || c.contains(target) || target.contains(c));
+      });
     }
 
     // Best candidate mechanism for `target` under TT test `test` ('2.A' |
-    // '2.B'), or null. `where` is 'first3' | 'near' | 'elsewhere'.
+    // '2.B' | '2.C'), or null. `where` is 'first3' | 'near' | 'elsewhere'.
     function find(target, test) {
       const rule = TESTS[test];
       if (!rule) throw new Error(`Unknown Trusted Tester test: ${test}`);
       const { order, tabStops, interactive, names } = pageSnapshot();
       const candidates = [];
-      if (target.controls) candidates.push({ el: target, name: 'native media controls' });
+      if (target.controls) candidates.push({ el: target, name: 'native media controls', named: true });
       for (const el of interactive) {
         if (el === target) continue;
         if (!names.has(el)) names.set(el, nameOf(el));
         const name = names.get(el);
-        if (rule.verbs.test(name) || controlsTarget(el, target)) candidates.push({ el, name });
+        const named = rule.verbs.test(name);
+        if (named || controlsTarget(el, target)) candidates.push({ el, name, named });
       }
       if (!candidates.length) return null;
 
+      // Best = best location, then a control whose name says what it does
+      // over one that only points at the target with aria-controls (a
+      // carousel's "Pause" over its "Next slide"), then the nearest.
       const [lo, hi] = rangeOf(target, order);
       const rank = { first3: 0, near: 1, elsewhere: 2 };
+      const better = (a, b) =>
+        rank[a.where] - rank[b.where] || Number(b.named) - Number(a.named) || a.distance - b.distance;
       let best = null;
       for (const c of candidates) {
         const index = order.indexOf(c.el);
@@ -168,13 +190,7 @@ if (!globalThis.__a11yMechanism) {
         else if (rule.nearby && index !== -1 && index >= lo - 3 && index <= hi + 3) where = 'near';
         const distance = index === -1 ? Infinity : Math.min(Math.abs(index - lo), Math.abs(index - hi));
         const m = { ...c, index, where, distance, tabStop: tabStops.indexOf(c.el) + 1 };
-        if (
-          !best ||
-          rank[m.where] < rank[best.where] ||
-          (rank[m.where] === rank[best.where] && m.distance < best.distance)
-        ) {
-          best = m;
-        }
+        if (!best || better(m, best) < 0) best = m;
       }
       return best;
     }

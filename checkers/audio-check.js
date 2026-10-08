@@ -149,10 +149,10 @@ globalThis.__a11yCheckers.audio = function audio() {
       const startedByUser = rec ? rec.user : null;
       if (startedByUser === true) continue; // the user started it: not auto-playing
       const m = find(el, '2.A');
-      // navigator.userActivation cannot settle this: chrome.scripting carries
-      // the popup click's user gesture into the page, so every checker run
-      // gives the page sticky activation. Only the autoplay attribute or a
-      // Reload-and-record entry (made with no gesture) proves autoplay.
+      // Only the autoplay attribute or a Reload-and-record entry (made with
+      // no gesture) proves autoplay. navigator.userActivation is not used:
+      // checker runs no longer give the page activation (#15), but any click
+      // the tester made on the page sets it too.
       const certain = el.autoplay || startedByUser === false;
       if (certain) {
         autoFinding(el, m, 'Audio plays automatically for more than 3 seconds.');

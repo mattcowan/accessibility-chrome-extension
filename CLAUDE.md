@@ -9,7 +9,10 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 
 - `background/service-worker.js` — message router + lifecycle events ONLY. All
   debugger/CDP logic lives in `background/debugger-manager.js`. The SW owns nothing
-  else; checkers are run by the popup, not the SW.
+  else; checkers are run by the popup, not the SW. The one injection path it has is
+  the `exec` route (`handleExec`): the popup's every `chrome.scripting` call is made
+  here, after a one-task wait, so the page never gets the click's user activation
+  (#15 — see the gotcha below). It is still routing: the popup decides what runs.
 - `background/debugger-manager.js` — chrome.debugger attach/detach + emulation state.
   **Every state mutation writes through to `chrome.storage.session` (`tab:${tabId}`)**
   because the MV3 SW dies after ~30s idle while the debugger attachment survives
@@ -17,12 +20,19 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   infobar). Emulation is re-applied on `tabs.onUpdated` (cross-process navigation
   persistence is not trusted).
 - `popup/popup.js` — the integration hub: emulation controls (via `chrome.runtime`
-  messages to the SW), checker injection (`chrome.scripting` under **activeTab** — no
-  host_permissions in the real manifest, keep it that way), findings store, diff, CSV.
+  messages to the SW), checker injection (under **activeTab** — no host_permissions
+  in the real manifest, keep it that way — and always through the SW's `exec` route
+  via `inject`/`pageCall`/`callChecker`; popup.js must contain no `chrome.scripting`
+  call), findings store, diff, CSV. The popup's own small page operations (reveal,
+  highlight all, clear overlays, read the stateful tools' DOM markers) live in
+  `checkers/lib/ops.js` (`__a11yOps`), because `exec` can only call a named method
+  on an allowed global (`__a11yCheckers`, `__a11yHover`, `__a11yOps`).
   Run-button checkers are declared in the `CHECKERS` registry (drives both the
   per-row buttons and the sequential "Run selected" batch; `data-batch-id` in
   popup.html must match `CHECKERS[].id` — hand-synced, init warns on mismatch).
-  Batch order = registry order, deliberately: text-spacing analyze applies its
+  Batch order = registry order, deliberately: auto-update watches first (focus,
+  styles and the hover probe can change content or pause a carousel; it is
+  `batchDefault: false`, as it adds its watch time); text-spacing analyze applies its
   override stylesheet as a side effect, so it runs after target-size/reflow and a
   `batchCleanup` removes the overrides (batch only — the individual button leaves
   them applied); the slow hover probe runs last. The same popup.html also serves as
@@ -75,7 +85,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   Tester location rule: 2.A = first three elements only; 2.B (and later 2.C) = first
   three OR within three elements before/after. "Element" is counted in reading order
   (controls, media, alt-text images, text runs); the tab-stop position is reported
-  alongside. Shared by `motion-check.js` (video, 2.2.2) and `audio-check.js` (1.4.2).
+  alongside. Shared by `motion-check.js` (video, 2.2.2), `audio-check.js` (1.4.2)
+  and `auto-update.js` (2.C, which adds close/dismiss/speed/frequency/auto-rotate
+  verbs). A candidate is a control whose name matches the test's verbs, or whose
+  `aria-controls` names the target, an element holding it, or one inside it. The best
+  is: location rank, then name match over aria-controls-only (a carousel's "Pause"
+  beats its "Next slide"), then distance. Any control with a matching name anywhere
+  on the page is a candidate (the helper cannot tell what a button controls), so a
+  far-away "Pause" turns "no control" into "control elsewhere" — both are `warn` in
+  the 2.C checker.
   `<audio>` is deliberately NOT in the motion checker — sound is 1.4.2, not motion.
 - `checkers/audio-check.js` returns `{findings, playing}`, not an array — the popup's
   `execAudio` (registry `kind: 'audio'`) merges frames and adds a `(page)` review when
@@ -90,9 +108,31 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   popup warns instead of showing a silent empty pass), then dispatches one `__a11y-audio-rec` per record ON the
   media element (the event target crosses worlds; the detail is a JSON string, since
   only primitives cross).
+- `checkers/auto-update.js` (2.2.2 / TT 2.C and 4.1.2 / TT 2.D, registry
+  `kind: 'auto-update'`, top frame only, watch-only) — `{action: start|collect|
+  status}`. `start` installs a MutationObserver (text, child list, and `class`/
+  `style`/`hidden`/`aria-hidden`/`src`/`open`, with old-value checks so a re-set
+  attribute or re-rendered text is no change; document + open shadow roots present
+  at start), a 200 ms scroll-position sampler over overflow containers (scrollLeft
+  carousels fire no mutations), trusted-input listeners and a focusin log; the
+  watch ends itself after N s. The popup's `execAutoUpdate` waits with a visible
+  countdown (`#auto-update-progress`), then `collect` (awaits the end) reports —
+  never one long executeScript. Changes within 1 s after trusted input are dropped.
+  Grouping: each change's nearest box-making ancestor (display not none/contents/
+  inline; never body/html), then same-tag siblings merge into their parent (slides)
+  and a block merges into a changed ancestor ≤3 levels up; a region qualifies with
+  ≥2 updates (bursts split by 300 ms gaps) or one update ≥2 s long; nested
+  qualifying regions merge into the outer. Per region: one 2.2.2 finding
+  (mechanism 2.C: review / warn / warn) and one 4.1.2 finding: `review` if a change
+  was in a live region, a live region inside an ancestor ≤3 levels up changed with
+  ≥ half the updates (a carousel's "Slide 2 of 4" status), focus moved into it, or a
+  dialog appeared within 1 s; else `fail`. A `(page)` review appears ONLY when
+  reduced motion was on or input happened, so a static page has zero findings. The
+  watch time (`#auto-update-seconds`, `parseWatchSeconds`: whole seconds, default
+  10, max 300) is kept in `chrome.storage.local` `autoUpdateSeconds`.
 - `checkers/lib/live.js` (`__a11yLive`: `REGION_SELECTOR`, `politenessFor`,
-  `regionOf`) — live-region detection shared by `live-regions.js`, `error-capture.js`
-  and `input-watcher.js`. `checkers/lib/forms.js` (`__a11yForms`, needs `accname.js`)
+  `regionOf`) — live-region detection shared by `live-regions.js`, `error-capture.js`,
+  `input-watcher.js` and `auto-update.js`. `checkers/lib/forms.js` (`__a11yForms`, needs `accname.js`)
   — field selector, radio/checkbox group members, group label (fieldset legend or
   named group/radiogroup holding every member), table headers (`headers` attr, else
   `th` in the same row/column on a rowspan/colspan-aware grid), a field's own
@@ -166,9 +206,11 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - **Checker registration:** each checker file guards with
   `if (!globalThis.__a11yX)` and registers
   `globalThis.__a11yCheckers.<name> = (arg) => findings`. The popup first injects
-  `files[]`, then invokes via a second `executeScript` with
-  `func: (n, a) => globalThis.__a11yCheckers[n](a)`. Do NOT rely on files[]-injection
-  return values. Async checkers may return a Promise (executeScript awaits it).
+  `files[]`, then invokes via a second injection (both through the SW's `exec`)
+  that runs `globalThis.__a11yCheckers[n](arg)`. Do NOT rely on files[]-injection
+  return values. Async checkers may return a Promise (executeScript awaits it), but
+  keep one call short — the SW holds the message open while it waits; a timed watch
+  (auto-update) uses `start` + popup-side wait + `collect` instead.
 - **Findings schema** (shared with the scanner; both CSV writers must stay in sync):
   `{tool, wcag, severity: fail|warn|review, selector, snippet, details, url,
   timestamp, status}`. Popup stamps url/timestamp/status (url only when the finding
@@ -186,7 +228,10 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   attaches, reads, releases; refused during Reload and record; any CDP error other
   than "node gone" fails the whole read → `ok:false`), `inputWatch {action:
   start|stop|status}` from the popup and `{action: mark|unmark|event}` from the
-  watcher's content script (top frame, tab from `sender.tab`), `resetTab`. Pages also
+  watcher's content script (top frame, tab from `sender.tab`), `exec {files,
+  allFrames}` (→ `{ok}`) and `exec {global, method, args, allFrames}` (→ `{ok,
+  results: [{frameId, result}]}`; extension pages only — `sender.url` must be the
+  extension's origin), `resetTab`. Pages also
   post `errorCaptureUpdate` (a `PAGE_NOTICES` type: the SW returns false and never
   answers it; popup/panel consume it). Reload and record,
   `clickListeners` and the hover probe (start→end) take an in-memory per-tab
@@ -236,17 +281,19 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   mapped in debugger-manager); it coexists fine with Playwright's CDP connection.
 - `Page.addScriptToEvaluateOnNewDocument` silently does nothing under
   chrome.debugger unless `Page.enable` is sent first (verified 2026-10-05).
-- **Every popup-triggered `chrome.scripting.executeScript` carries the click's user
-  gesture into the page** — after any checker Run, `navigator.userActivation
-  .hasBeenActive` is true (verified: false via a SW-side injection on a fresh page,
-  true after one popup Run click). So `hasBeenActive` is useless for "did autoplay
-  happen without the user", and running checkers can unblock a page's audio. The
-  leak lasts as long as the click's transient activation (5 s in Chrome) — ANY
-  popup/panel `executeScript` in that window carries it, including automatic ones
-  like the side panel's `refreshForActiveTab` on reload (reproduced in E2E). Reload
-  and record therefore waits out `ACTIVATION_EXPIRY_MS` from the click before it
-  injects, and `recordingAudio` suppresses the panel's reload refresh. The reload
-  itself comes from the SW, which has no gesture.
+- **A popup-made `chrome.scripting.executeScript` carries the click's user gesture
+  into the page** (`navigator.userActivation.hasBeenActive` turns true; the page can
+  then start audio the autoplay policy blocked). It lasts as long as the popup's
+  transient activation (5 s in Chrome) and hits automatic injections too, such as
+  the side panel's `refreshForActiveTab`. **Routing through the SW alone does not
+  fix it**: Chrome forwards the sender's gesture into the SW's `onMessage` dispatch,
+  and an executeScript made in that same task leaks it too. A call after one
+  microtask, an await, or `setTimeout(0)` does not (all verified 2026-10-08 in a
+  throwaway Playwright experiment, with the popup-direct path as the control). So
+  `handleExec` waits one task before it injects — never remove that wait, and never
+  add a popup-side `chrome.scripting` call (#15). The E2E `[#15]` section guards
+  this, probing from the SW. The audio checker still does not read
+  `hasBeenActive`: the tester's own page clicks set it too.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,
   `prefers-reduced-transparency`) are capability-probed on first attach and their UI
   hidden if rejected — keep the probe when adding features.
@@ -256,13 +303,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 208/208 on 2026-10-08 (123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 249 checks on 2026-10-08 after #9 (auto-update + #15; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
   `chrome.runtime.sendMessage` and `chrome.scripting` from that page. It asserts against
   `data-expect` in test-pages. It covers motion 2.B, audio, Reload and record, the
-  batch runner, keyboard access, the focus locator, and the TT section 5 tools (form
+  batch runner, no user activation from any checker path (`[#15]`, probed from the
+  SW, with a real page click as the control), auto-update (`data-expect` = 2.2.2,
+  `data-expect-notify` = 4.1.2), keyboard access, the focus locator, and the TT section 5 tools (form
   labels, error capture, input watcher — the test plays the tester with real
   clicks/keys/selects); older checkers have no section yet — **extend it with each new checker**
   (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
