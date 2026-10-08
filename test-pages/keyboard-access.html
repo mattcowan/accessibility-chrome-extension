@@ -169,6 +169,11 @@
     </div>
   </div>
 
+  <div class="test-section">
+    <h3>Pass (r): span role="button" in a shadow root whose host is inert</h3>
+    <div id="inert-host" inert></div>
+  </div>
+
   <hr>
   <p><a href="index.html" id="back-link">← Back to index</a></p>
 
@@ -187,6 +192,9 @@
     root.innerHTML =
       '<span id="shadow-span" role="button" style="padding:0.3rem 0.7rem;background:#eee">Shadow action</span> ' +
       '<button id="shadow-btn" type="button">Shadow button</button>';
+    // Pass (r): inert reaches into the shadow root, but closest('[inert]') does not.
+    document.getElementById('inert-host').attachShadow({ mode: 'open' }).innerHTML =
+      '<span id="inert-span" role="button" style="padding:0.3rem 0.7rem;background:#eee">Inert action</span>';
   </script>
 </body>
 </html>

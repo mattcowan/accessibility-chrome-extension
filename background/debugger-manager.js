@@ -162,11 +162,51 @@ export async function detachIfIdle(tabId) {
   return defaultTabState();
 }
 
+// Transient debugger users on a tab (hover probe start→end, the click-listener
+// read, Reload and record). Each holds the session while it works; the
+// debugger detaches only when no hold is left AND no emulation is on, so
+// neither one user's cleanup nor an emulation toggle can detach another user
+// mid-way (the popup and the side panel can both drive one tab).
+// In memory, unlike tab state: if the SW dies, the holds die with it, and the
+// worst case is the old behavior (an early detach). A hover probe whose popup
+// closed before 'end' keeps its hold until the debugger detaches or the tab
+// closes; it left the debugger attached before holds existed too.
+const debuggerHolds = new Map();
+
+export function holdDebugger(tabId) {
+  debuggerHolds.set(tabId, (debuggerHolds.get(tabId) || 0) + 1);
+}
+
+// Returns the tab state after the release (detached if this was the last
+// hold and no emulation is on).
+export async function releaseDebugger(tabId) {
+  const left = (debuggerHolds.get(tabId) || 1) - 1;
+  if (left > 0) {
+    debuggerHolds.set(tabId, left);
+    return getTabState(tabId);
+  }
+  debuggerHolds.delete(tabId);
+  return detachIfIdle(tabId);
+}
+
+// Nothing is attached any more (external detach, tab closed), so no hold can
+// be honored; this also frees an orphaned hover-probe hold.
+export function clearHolds(tabId) {
+  debuggerHolds.delete(tabId);
+}
+
 // Single entry point for all popup-driven state changes.
 export async function updateTabState(tabId, mutate) {
   const state = await getTabState(tabId);
   mutate(state);
   if (isAllOff(state)) {
+    if (state.attached && debuggerHolds.has(tabId)) {
+      // A hold-taker is mid-way: clear the overrides but stay attached. The
+      // last releaseDebugger detaches (detachIfIdle sees all-off).
+      await applyState(tabId, state).catch(() => {});
+      await saveTabState(tabId, state);
+      return { ok: true, state };
+    }
     if (state.attached) await detachDebugger(tabId);
     await clearTabState(tabId);
     return { ok: true, state: defaultTabState() };
@@ -203,10 +243,12 @@ export async function removeScriptOnNewDocument(tabId, identifier) {
 }
 
 // --- Click listeners for the mouse-only scan (2.1.1 / TT 4.A) ---------------
-// Content scripts cannot see addEventListener listeners; CDP can. Returns the
-// child-index path from the top document of every element that has a
-// click-type listener (-1 = enter the open shadow root), for the checker in
-// the page to resolve. Nodes inside iframes return no path (known gap).
+// Content scripts cannot see addEventListener listeners; CDP can. Returns
+// {path, tag} for every element that has a click-type listener: the
+// child-index path from the top document (-1 = enter the shadow root), for
+// the checker in the page to resolve, and the tag name it checks against.
+// Known gaps: nodes inside iframes return no path, and a path through a
+// CLOSED shadow root does not resolve in the page (shadowRoot is null).
 
 const CLICK_TYPES = new Set(['click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup']);
 const LISTENER_NODE_CAP = 500;
@@ -236,7 +278,7 @@ const PATH_FN = `function () {
       node = parent;
     }
   }
-  return node === document ? path : null;
+  return node === document ? { path: path, tag: this.tagName } : null;
 }`;
 
 export async function clickListenerPaths(tabId) {
@@ -267,7 +309,7 @@ export async function clickListenerPaths(tabId) {
           functionDeclaration: PATH_FN,
           returnByValue: true,
         });
-        if (Array.isArray(result.value)) paths.push(result.value);
+        if (result.value && Array.isArray(result.value.path)) paths.push(result.value);
       } catch (e) {
         // Only a node that went away between the calls is skipped. Anything
         // else (the session detached, the tab closed) fails the whole read,

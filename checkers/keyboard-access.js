@@ -6,12 +6,15 @@
 // tabbable element. Every finding is `review` — TT 4.A step 3 accepts another
 // keyboard method for the same function, and only a person can judge that.
 //
-// listenerPaths: child-index paths from the top document (-1 = enter the
-// open shadow root) of elements with click-type listeners, read by the
-// service worker through CDP (DOMDebugger.getEventListeners). Content
-// scripts cannot see addEventListener listeners. Applied in the top frame
-// only; listeners inside iframes are a known gap (static signals still run
-// in every frame). null = not available.
+// listenerPaths: [{path, tag}] for elements with click-type listeners, read
+// by the service worker through CDP (DOMDebugger.getEventListeners). path is
+// the child-index path from the top document (-1 = enter the shadow root);
+// tag is the element's tagName at read time, so a path that now lands on a
+// different element (the DOM changed between the read and the scan) is
+// dropped. Content scripts cannot see addEventListener listeners. Applied in
+// the top frame only. Known gaps: listeners inside iframes (static signals
+// still run in every frame) and inside closed shadow roots (the path cannot
+// enter them). null = not available.
 //
 // Never focuses, clicks or presses keys.
 if (!globalThis.__a11yKeyboardAccess) {
@@ -85,6 +88,17 @@ if (!globalThis.__a11yKeyboardAccess) {
       return root instanceof ShadowRoot ? root.host : null;
     }
 
+    // inert is inherited through the flat tree, but F.isVisible's
+    // closest('[inert]') stops at a shadow boundary. Neither mouse nor
+    // keyboard reaches inert content, so it is neither a candidate nor a
+    // keyboard path.
+    function isInert(el) {
+      for (let n = el; n; n = composedParent(n)) {
+        if (n.hasAttribute('inert')) return true;
+      }
+      return false;
+    }
+
     function tabbableAncestor(el) {
       for (let p = composedParent(el); p; p = composedParent(p)) {
         if (isTabbable(p)) return p;
@@ -106,7 +120,7 @@ if (!globalThis.__a11yKeyboardAccess) {
     function firstTabbableInside(el) {
       const items = [];
       F.collectMatching(el, F.FOCUSABLE_SELECTOR, items);
-      return items.find((i) => isTabbable(i) && F.isVisible(i)) || null;
+      return items.find((i) => isTabbable(i) && F.isVisible(i) && !isInert(i)) || null;
     }
 
     function resolvePath(path) {
@@ -126,7 +140,8 @@ if (!globalThis.__a11yKeyboardAccess) {
       const set = new Set();
       if (!Array.isArray(paths) || window !== window.top) return set;
       for (const p of paths) {
-        const el = Array.isArray(p) ? resolvePath(p) : null;
+        const found = p && Array.isArray(p.path) ? resolvePath(p.path) : null;
+        const el = found && found.tagName === p.tag ? found : null;
         // A listener on <html>/<body> is delegation: it says nothing about
         // which element is clickable.
         if (el && el !== document.documentElement && el !== document.body) set.add(el);
@@ -167,7 +182,7 @@ if (!globalThis.__a11yKeyboardAccess) {
         if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') continue;
         const signals = signalsFor(el, listeners);
         if (!signals.length) continue;
-        if (!F.isVisible(el)) continue;
+        if (!F.isVisible(el) || isInert(el)) continue;
         if (el.tagName === 'LABEL' && el.control && isTabbable(el.control)) continue;
         if (tabbableAncestor(el)) continue;
         if (inReachableComposite(el)) continue;

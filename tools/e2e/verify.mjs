@@ -378,6 +378,8 @@ try {
     }
     const shadow = severityFor(f, '#shadow-host >>> #shadow-span', '2.1.1');
     check('[keyboard-access] span role=button in an open shadow root → review', shadow === 'review', `got ${shadow}`);
+    const inertShadow = severityFor(f, '#inert-host >>> #inert-span', '2.1.1');
+    check('[keyboard-access] span role=button in a shadow root under an inert host → pass', inertShadow === 'pass', `got ${inertShadow}`);
     check('[keyboard-access] every finding is 2.1.1 review', f.length > 0 && f.every((x) => x.wcag === '2.1.1' && x.severity === 'review'), JSON.stringify(f.map((x) => [x.wcag, x.severity])));
     const listenerDiv = f.find((x) => x.selector === '#listener-div');
     check('[keyboard-access] #listener-div found through its CDP click listener', !!listenerDiv && /a click listener/.test(listenerDiv.details), JSON.stringify(listenerDiv));
@@ -400,6 +402,20 @@ try {
     }, tabId);
     check('[keyboard-access] listener read keeps a running hover probe attached', held.start && held.read && held.duringProbe, JSON.stringify(held));
     check('[keyboard-access] hover probe end then detaches', !held.afterEnd, JSON.stringify(held));
+
+    // Turning the last emulation toggle off during a hold must not detach.
+    const toggled = await env.popup.evaluate(async (tabId) => {
+      const tabState = async () => ((await chrome.storage.session.get(`tab:${tabId}`))[`tab:${tabId}`] || {}).attached === true;
+      const send = (m) => chrome.runtime.sendMessage({ ...m, tabId });
+      await send({ type: 'hoverProbe', action: 'start' });
+      await send({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: 'reduce' });
+      const off = await send({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: null });
+      const duringHold = await tabState();
+      await send({ type: 'hoverProbe', action: 'end' });
+      return { offOk: off.ok, duringHold, afterEnd: await tabState() };
+    }, tabId);
+    check('[holds] last emulation toggle off during a hover probe keeps it attached', toggled.offOk && toggled.duringHold, JSON.stringify(toggled));
+    check('[holds] hover probe end then detaches (emulation all off)', !toggled.afterEnd, JSON.stringify(toggled));
 
     // The outline:none button is a 2.4.7 problem for Focus visibility, not 2.1.1.
     await clickAndWait(env, 'run-focus', /^focus-visibility: \d+ findings/);
@@ -532,7 +548,12 @@ try {
     check('[locator] reopened popup shows "Stop locator"', label === 'Stop locator', label);
 
     // Turning it off removes everything it added, and it stays gone on Tab.
-    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    // The label is made stale first ("Start" while the locator runs, as when
+    // the side panel stopped and restarted it): the toggle must ask the page.
+    await env.popup.evaluate(() => {
+      document.getElementById('status').textContent = '';
+      document.getElementById('toggle-focus-locator').textContent = 'Start locator';
+    });
     await env.popup.click('#toggle-focus-locator');
     await env.popup.waitForFunction(() => /focus locator: off/.test(document.getElementById('status').textContent));
     await page.keyboard.press('Tab');

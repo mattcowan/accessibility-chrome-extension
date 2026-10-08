@@ -115,11 +115,14 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `setVisionDeficiency`, `setReflow {value: false|'320'|'320zoom'}` ('320zoom' adds
   `scale: 4` to the viewport override — same 320px layout, 400%-zoom rendering),
   `hoverProbe {action: start|move|escape|end}`, `recordAudio` (→ `{ok, loaded}` after
-  the reload finishes), `clickListeners` (→ `{ok, paths, truncated}`; attaches, reads,
-  releases; refused during Reload and record; any CDP error other than "node gone"
-  fails the whole read → `ok:false`), `resetTab`; Reload and record, `clickListeners`
-  and the hover probe (start→end) take an in-memory per-tab **debugger hold** in the
-  SW, and `detachIfIdle` runs only when the last hold is released; SW broadcasts
+  the reload finishes), `clickListeners` (→ `{ok, paths: [{path, tag}], truncated}`;
+  attaches, reads, releases; refused during Reload and record; any CDP error other
+  than "node gone" fails the whole read → `ok:false`), `resetTab`; Reload and record,
+  `clickListeners` and the hover probe (start→end) take an in-memory per-tab
+  **debugger hold** (`holdDebugger`/`releaseDebugger` in debugger-manager.js). The
+  debugger detaches only when no hold is left and no emulation is on: the last
+  release runs `detachIfIdle`, and `updateTabState`'s all-off branch clears the
+  overrides but stays attached while a hold exists; SW broadcasts
   `stateChanged {tabId, state, reason}`.
 - **Intentional duplication:** `checkers/lib/selector.js`+`findings.js` vs
   `tools/keyboard-trap-scan/lib/focusables.js`, and `popup/csv.js` vs
@@ -179,7 +182,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 118/118 on 2026-10-07 (58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 121/121 on 2026-10-07 (58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

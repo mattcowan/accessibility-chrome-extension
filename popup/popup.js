@@ -642,7 +642,15 @@ async function execKeyboardAccess(entry) {
   await inject([...LIBS, ...entry.files], true);
   const arg = { listenerPaths: res && res.ok ? res.paths : null };
   const results = await callChecker('keyboardAccess', arg, true);
-  const findings = results.flatMap((r) => (Array.isArray(r.result) ? r.result : []));
+  const all = results.flatMap((r) => (Array.isArray(r.result) ? r.result : []));
+  // Each frame that hits the cap returns its own '(page)' note. Merge them
+  // (and the listener note below) into one, so the diff fingerprint
+  // tool|wcag|(page) stays unique.
+  const findings = all.filter((f) => f.selector !== '(page)');
+  const pageNotes = all.filter((f) => f.selector === '(page)');
+  if (pageNotes.length) {
+    findings.push({ ...pageNotes[0], details: [...new Set(pageNotes.map((f) => f.details))].join(' ') });
+  }
   let note = '';
   if (!res || !res.ok) {
     note =
@@ -893,7 +901,10 @@ function wireCheckers() {
     e.target.disabled = true;
     try {
       await inject(LOCATOR_FILES);
-      const starting = e.target.textContent.startsWith('Start');
+      // Ask the page, not the button label: the popup and the side panel can
+      // both be open, and the other one may have started or stopped it.
+      const [status] = await callChecker('focusLocator', 'status');
+      const starting = !(status.result && status.result.active);
       await callChecker('focusLocator', starting ? 'start' : 'stop');
       e.target.textContent = starting ? 'Stop locator' : 'Start locator';
       announce(

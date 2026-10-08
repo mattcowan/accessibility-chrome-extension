@@ -89,30 +89,14 @@ async function handle(msg) {
   }
 }
 
-// Transient debugger users on a tab (hover probe start→end, the click-listener
-// read, Reload and record). Each holds the session while it works; detachIfIdle
-// runs only when the last one releases, so one user's cleanup cannot detach
-// another mid-way (the popup and the side panel can both drive one tab).
-// In-memory like recordingTabs: if the SW dies, the holds die with it, and the
-// worst case is the old behavior (an early detach). A hover probe whose popup
-// closed before 'end' keeps its hold until the debugger detaches or the tab
-// closes; it left the debugger attached before holds existed too.
-const debuggerHolds = new Map();
-
+// Debugger holds (see debugger-manager.js): the hover probe, the click-listener
+// read and Reload and record each hold the session while they work.
 function holdDebugger(tabId) {
-  debuggerHolds.set(tabId, (debuggerHolds.get(tabId) || 0) + 1);
+  dbg.holdDebugger(tabId);
 }
 
 async function releaseDebugger(tabId) {
-  const left = (debuggerHolds.get(tabId) || 1) - 1;
-  let state;
-  if (left > 0) {
-    debuggerHolds.set(tabId, left);
-    state = await dbg.getTabState(tabId);
-  } else {
-    debuggerHolds.delete(tabId);
-    state = await dbg.detachIfIdle(tabId);
-  }
+  const state = await dbg.releaseDebugger(tabId);
   broadcast(tabId, state);
   return state;
 }
@@ -225,9 +209,7 @@ async function recordAudioCycle(tabId) {
 // Detached externally: infobar "x" clicked, DevTools attached, target crashed.
 chrome.debugger.onDetach.addListener(async (source, reason) => {
   if (!source.tabId) return;
-  // Nothing is attached any more, so no hold can be honored; this also frees
-  // the hold of a hover probe whose popup closed before 'end'.
-  debuggerHolds.delete(source.tabId);
+  dbg.clearHolds(source.tabId);
   await dbg.clearTabState(source.tabId);
   broadcast(
     source.tabId,
@@ -239,7 +221,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  debuggerHolds.delete(tabId);
+  dbg.clearHolds(tabId);
   await dbg.clearTabState(tabId);
   await chrome.storage.session.remove(`findings:${tabId}`);
 });
