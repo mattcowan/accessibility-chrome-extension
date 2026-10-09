@@ -308,14 +308,15 @@ try {
       const got = await probe();
       check(`[#15] after ${label}: no user activation, play() still blocked`, !got.active && got.play === 'NotAllowedError', JSON.stringify(got));
     }
-    const overlay = await page.evaluate(() => document.querySelectorAll('#__a11y-overlay > *').length);
-    check('[#15] reveal and Highlight all drew on the page through the SW route', overlay > 0, `overlay children: ${overlay}`);
     // Control: a real click on the page does give activation, so the probe
-    // can see it.
+    // can see it. Nothing may touch the page with page.evaluate before this
+    // (evaluate itself gives activation and would make the control pass).
     await page.bringToFront();
     await page.mouse.click(5, 5);
     const clicked = await probe();
     check('[#15] control: a real page click gives activation (the probe works)', clicked.active === true, JSON.stringify(clicked));
+    const overlay = await page.evaluate(() => document.querySelectorAll('#__a11y-overlay > *').length);
+    check('[#15] reveal and Highlight all drew on the page through the SW route', overlay > 0, `overlay children: ${overlay}`);
     await page.close();
   }
   for (const file of ['audio-autoplay.html', 'audio-pause-first.html', 'audio-script.html']) {
@@ -473,8 +474,14 @@ try {
     // button controls), so (a) sees the ticker's, out of place.
     check('[auto-update] (a) the ticker\'s Pause is a candidate outside the TT 2.C location', /not where Trusted Tester 2\.C expects it/.test(det('#carousel-a', '2.2.2')) && /#ticker-pause/.test(det('#carousel-a', '2.2.2')), det('#carousel-a', '2.2.2'));
     check('[auto-update] (e) names its own live region', /in a live region \(#counter-live, polite\)/.test(det('#counter-live', '4.1.2')), det('#counter-live', '4.1.2'));
-    check('[auto-update] (h) names the slide status beside the track', /live region next to this content \(#carousel-h-status, polite\)/.test(det('#carousel-h', '4.1.2')), det('#carousel-h', '4.1.2'));
-    check('[auto-update] (h) the Pause button with aria-controls is the control', /Candidate control "Pause"/.test(det('#carousel-h', '2.2.2')), det('#carousel-h', '2.2.2'));
+    check('[auto-update] (h) names the slide status beside the track', /live region in or next to this content \(#carousel-h-status, polite\)/.test(det('#carousel-h', '4.1.2')), det('#carousel-h', '4.1.2'));
+    check('[auto-update] (h) its Pause button is the control', /Candidate control "Pause" at #carousel-h-pause/.test(det('#carousel-h', '2.2.2')), det('#carousel-h', '2.2.2'));
+    check('[auto-update] (i) the live neighbor does not hide the silent counter', /not told about the updates/.test(det('#stat-price', '4.1.2')), det('#stat-price', '4.1.2'));
+    check('[auto-update] (j) style writes only: says it cannot tell decoration from information', /Only inline styles changed/.test(det('#progress-bar', '4.1.2')), det('#progress-bar', '4.1.2'));
+    check('[auto-update] (k) a headline link is not the control, even one that starts with "Stop"', !/Candidate control "(Markets|Bus|High|Stop the)/.test(det('#link-ticker', '2.2.2')), det('#link-ticker', '2.2.2'));
+    check('[auto-update] (m) a dialog in the page wrapper is not "next to" the carousel', /not told about the updates/.test(det('#carousel-m', '4.1.2')), det('#carousel-m', '4.1.2'));
+    check('[auto-update] (l) Previous/Next with aria-controls are not a pause control', !/Candidate control "(Previous|Next)/.test(det('#carousel-l', '2.2.2')), det('#carousel-l', '2.2.2'));
+    check('[auto-update] a dialog that opened once elsewhere is no notice for any case', !f.some((x) => x.wcag === '4.1.2' && /A dialog \(/.test(x.details) && x.selector !== '[role="dialog"]' && !/dialog/.test(x.selector)), show);
     check('[auto-update] (g) the scroll carousel is found with no DOM change', /updated on its own/.test(det('#scroller', '2.2.2')), det('#scroller', '2.2.2'));
     check('[auto-update] no page note when reduced motion is off and nobody touched the page', !f.some((x) => x.selector === '(page)'), show);
     check('[auto-update] every finding is 2.2.2 or 4.1.2', f.length > 0 && f.every((x) => x.wcag === '2.2.2' || x.wcag === '4.1.2'), show);
@@ -487,7 +494,12 @@ try {
     await sw.evaluate(async (tabId) => {
       await chrome.scripting.executeScript({
         target: { tabId },
-        func: () => ['ticker-pause', 'carousel-h-pause'].forEach((id) => document.getElementById(id).remove()),
+        // Also (k)'s "Stop the presses" link: skipped inside its own ticker,
+        // but anywhere else on the page a matching name is a candidate.
+        func: () => {
+          ['ticker-pause', 'carousel-h-pause'].forEach((id) => document.getElementById(id).remove());
+          document.querySelector('#link-ticker a:not(.rotating)').remove();
+        },
       });
     }, tabId);
     await env.popup.evaluate(() => {

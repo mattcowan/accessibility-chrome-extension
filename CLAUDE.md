@@ -86,14 +86,19 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   three OR within three elements before/after. "Element" is counted in reading order
   (controls, media, alt-text images, text runs); the tab-stop position is reported
   alongside. Shared by `motion-check.js` (video, 2.2.2), `audio-check.js` (1.4.2)
-  and `auto-update.js` (2.C, which adds close/dismiss/speed/frequency/auto-rotate
-  verbs). A candidate is a control whose name matches the test's verbs, or whose
-  `aria-controls` names the target, an element holding it, or one inside it. The best
-  is: location rank, then name match over aria-controls-only (a carousel's "Pause"
-  beats its "Next slide"), then distance. Any control with a matching name anywhere
-  on the page is a candidate (the helper cannot tell what a button controls), so a
-  far-away "Pause" turns "no control" into "control elsewhere" — both are `warn` in
-  the 2.C checker.
+  and `auto-update.js` (2.C). 2.A/2.B: a candidate is a control whose name matches
+  the verbs anywhere, or whose `aria-controls` names the target's id (exact id only —
+  widening it to "an element holding the target" made an accordion button over a
+  video count as its pause control; reverted after review 2026-10-09). 2.C is
+  stricter (`nameMatches`, `maxWords`, `requireName`, `skipLinksInside`): the name must
+  START with the verb (incl. "Start/Stop", "Auto rotate") and be ≤4 words, links inside
+  the updating content are never candidates (a headline can start "Stop the …"), no close/dismiss, and aria-controls alone never makes a
+  candidate — the updating content is full of links ("Markets close higher", "Bus
+  stop moved") and its Previous/Next buttons point at it but pause nothing. The best
+  is: location rank, then name match over aria-controls-only, then distance. Any
+  control with a matching name anywhere on the page is a candidate (the helper
+  cannot tell what a button controls), so a far-away "Pause" turns "no control" into
+  "control elsewhere" — both are `warn` in the 2.C checker.
   `<audio>` is deliberately NOT in the motion checker — sound is 1.4.2, not motion.
 - `checkers/audio-check.js` returns `{findings, playing}`, not an array — the popup's
   `execAudio` (registry `kind: 'audio'`) merges frames and adds a `(page)` review when
@@ -120,14 +125,31 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   never one long executeScript. Changes within 1 s after trusted input are dropped.
   Grouping: each change's nearest box-making ancestor (display not none/contents/
   inline; never body/html), then same-tag siblings merge into their parent (slides)
-  and a block merges into a changed ancestor ≤3 levels up; a region qualifies with
+  and a block merges into its PARENT when the parent changed too (parent only: a
+  one-time insertion into a page wrapper such as #root a few levels up used to swallow
+  the carousel inside it — review 2026-10-09); a region qualifies with
   ≥2 updates (bursts split by 300 ms gaps) or one update ≥2 s long; nested
   qualifying regions merge into the outer. Per region: one 2.2.2 finding
-  (mechanism 2.C: review / warn / warn) and one 4.1.2 finding: `review` if a change
-  was in a live region, a live region inside an ancestor ≤3 levels up changed with
-  ≥ half the updates (a carousel's "Slide 2 of 4" status), focus moved into it, or a
-  dialog appeared within 1 s; else `fail`. A `(page)` review appears ONLY when
-  reduced motion was on or input happened, so a static page has zero findings. The
+  (mechanism 2.C: review / warn / warn) and one 4.1.2 finding (`notification()`):
+  `review` if every change was in a live region; or a live region in scope (an
+  ancestor ≤3 levels up) changed within 1 s of ≥ half the silent updates AND about
+  as often (±1 — a carousel's "Slide 2 of 4" status; a live counter beside the
+  content on its own schedule fails this, one on the very same ticks cannot be told
+  apart and stays review); or focus moved into it; or a dialog OPENED (`noteDialog`
+  tracks open transitions, so restyling an open dialog is not a new one) near an
+  update and holds the region or is inside it (no "next to" scope for dialogs: scope can
+  climb to a page wrapper that holds every dialog), or dialogs opened near ≥3 updates
+  and ≥80% of them (two unrelated one-time dialogs must not qualify). The live-region
+  scope can also reach a wrapper; the ±1 frequency test is what guards it. A silent
+  block on the SAME ticks as a live neighbor stays `review` (decided by Matt
+  2026-10-09: it cannot be told from a carousel slide status). Else `fail` — except a region whose changes are ALL inline `style`
+  writes (rAF/GSAP animation, progress bar, transform carousel), which is `review`:
+  decoration and information cannot be told apart (the "never upgrade uncertain to
+  fail" contract outranks #14's "none → fail"). Same-tag siblings never merge when
+  one is all-live and the other is not. Dialogs shown by a class on a wrapper
+  ancestor are not seen. A `(page)` review appears ONLY when reduced motion was on,
+  input happened, or there were more than 200 scrolling containers (the rest are not
+  sampled), so a static page has zero findings. The
   watch time (`#auto-update-seconds`, `parseWatchSeconds`: whole seconds, default
   10, max 300) is kept in `chrome.storage.local` `autoUpdateSeconds`.
 - `checkers/lib/live.js` (`__a11yLive`: `REGION_SELECTOR`, `politenessFor`,
@@ -303,7 +325,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 249 checks on 2026-10-08 after #9 (auto-update + #15; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 267 checks on 2026-10-09 after the #9 review rounds (249 before them; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

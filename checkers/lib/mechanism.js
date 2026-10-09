@@ -31,13 +31,29 @@ if (!globalThis.__a11yMechanism) {
         nearby: true,
       },
       // Auto-updating content: pause, stop, or hide it, or set how often it
-      // updates (a close button hides a ticker; a "speed" or "auto-rotate"
-      // control sets the frequency).
+      // updates. Stricter than 2.A/2.B, because the content itself is often
+      // full of links: the name must START with the verb and be at most four
+      // words ("Pause slideshow", "Change speed"), so a headline link such as
+      // "Markets close higher" or "Bus stop moved" is not a control. No
+      // close/dismiss: those hide a cookie bar or a dialog far more often than
+      // updating content. A control that only points at the content with
+      // aria-controls is no candidate either (a carousel's "Next slide" does
+      // not pause it).
+      // A short headline can still start with a verb ("Stop the presses"), so
+      // links INSIDE the updating content are never candidates either.
       '2.C': {
-        verbs: /\b(pause|stop|play|hide|freeze|close|dismiss|frequency|speed|interval|auto-?(play|refresh|update|rotate|scroll|advance))\b/i,
+        verbs: /^\W*((set|change|toggle|adjust)\s+)?(pause|stop|start\/stop|play|hide|freeze|speed|frequency|interval|auto[-\s]?(play|refresh|update|rotate|rotation|scroll|advance))\b/i,
+        maxWords: 4,
+        requireName: true,
+        skipLinksInside: true,
         nearby: true,
       },
     };
+
+    function nameMatches(rule, name) {
+      if (rule.maxWords && name.trim().split(/\s+/).length > rule.maxWords) return false;
+      return rule.verbs.test(name);
+    }
 
     const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'META', 'LINK']);
     const MEDIA_TAGS = new Set(['VIDEO', 'AUDIO', 'IFRAME', 'CANVAS']);
@@ -145,17 +161,9 @@ if (!globalThis.__a11yMechanism) {
       return (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim();
     }
 
-    // aria-controls on `el` names the target, an element that holds it (a
-    // "pause all" for a section), or an element inside it (a carousel's
-    // controls name its slide track, which may be inside the changing region).
     function controlsTarget(el, target) {
       const ids = (el.getAttribute('aria-controls') || '').split(/\s+/).filter(Boolean);
-      if (target.id && ids.includes(target.id)) return true;
-      const root = target.getRootNode();
-      return ids.some((id) => {
-        const c = root.getElementById ? root.getElementById(id) : null;
-        return !!c && (c === target || c.contains(target) || target.contains(c));
-      });
+      return !!target.id && ids.includes(target.id);
     }
 
     // Best candidate mechanism for `target` under TT test `test` ('2.A' |
@@ -168,16 +176,17 @@ if (!globalThis.__a11yMechanism) {
       if (target.controls) candidates.push({ el: target, name: 'native media controls', named: true });
       for (const el of interactive) {
         if (el === target) continue;
+        if (rule.skipLinksInside && el.matches('a[href]') && target.contains(el)) continue;
         if (!names.has(el)) names.set(el, nameOf(el));
         const name = names.get(el);
-        const named = rule.verbs.test(name);
-        if (named || controlsTarget(el, target)) candidates.push({ el, name, named });
+        const named = nameMatches(rule, name);
+        if (named || (!rule.requireName && controlsTarget(el, target))) candidates.push({ el, name, named });
       }
       if (!candidates.length) return null;
 
       // Best = best location, then a control whose name says what it does
-      // over one that only points at the target with aria-controls (a
-      // carousel's "Pause" over its "Next slide"), then the nearest.
+      // over one that only points at the target with aria-controls (2.A/2.B:
+      // a "Pause video" button over an unnamed icon button), then the nearest.
       const [lo, hi] = rangeOf(target, order);
       const rank = { first3: 0, near: 1, elsewhere: 2 };
       const better = (a, b) =>

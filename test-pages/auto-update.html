@@ -19,6 +19,10 @@
     .slide.active { display: block; }
     .scroller { width: 300px; overflow: hidden; white-space: nowrap; border: 1px solid #999; }
     .panel { display: inline-block; width: 300px; padding: 1rem 0; text-align: center; background: #fef3c7; }
+    .bar-track { width: 300px; height: 12px; background: #e5e7eb; }
+    .bar { height: 12px; width: 0; background: #2563eb; }
+    .notice { padding: 0.5rem; border: 2px solid #b45309; background: #fffbeb; }
+    .notice.flash { background: #fde68a; }
   </style>
 </head>
 <body>
@@ -137,6 +141,81 @@
     </div>
   </div>
 
+  <p>Filler paragraph twenty-nine.</p>
+  <p>Filler paragraph thirty.</p>
+  <p>Filler paragraph thirty-one.</p>
+  <p>Filler paragraph thirty-two.</p>
+
+  <div class="case">
+    <strong>(i) A live counter beside a silent one:</strong>
+    <p>Two counters in one box, on their own timers. Only the first is a live region. The live one must not hide the silent one.</p>
+    <div class="stats">
+      <p id="stat-visitors" aria-live="polite" data-expect="warn" data-expect-notify="review">Visitors: <span>12</span></p>
+      <p id="stat-price" data-expect="warn" data-expect-notify="fail">Price: <span>100</span></p>
+    </div>
+  </div>
+
+  <p>Filler paragraph thirty-three.</p>
+  <p>Filler paragraph thirty-four.</p>
+  <p>Filler paragraph thirty-five.</p>
+  <p>Filler paragraph thirty-six.</p>
+
+  <div class="case">
+    <strong>(j) Progress bar that a script animates (style writes only):</strong>
+    <p>A script sets the bar's width every frame. The checker cannot tell decoration from information, so the notice result is review.</p>
+    <div class="bar-track"><div class="bar" id="progress-bar" data-expect="warn" data-expect-notify="review"></div></div>
+  </div>
+
+  <p>Filler paragraph thirty-seven.</p>
+  <p>Filler paragraph thirty-eight.</p>
+  <p>Filler paragraph thirty-nine.</p>
+  <p>Filler paragraph forty.</p>
+
+  <div class="case">
+    <strong>(k) Ticker of headline links (defect):</strong>
+    <p>The link text contains "close", "stop" and "speed", and the second headline starts with "Stop". A headline is not a control.</p>
+    <p id="link-ticker" data-expect="warn" data-expect-notify="fail"><a href="#" class="rotating">Markets close higher</a> | <a href="#">Stop the presses</a></p>
+  </div>
+
+  <p>Filler paragraph forty-one.</p>
+  <p>Filler paragraph forty-two.</p>
+  <p>Filler paragraph forty-three.</p>
+  <p>Filler paragraph forty-four.</p>
+
+  <div class="case">
+    <strong>(l) Carousel with Previous and Next only (defect):</strong>
+    <p>The buttons point at the track with aria-controls, but nothing pauses the rotation.</p>
+    <div class="carousel">
+      <button type="button" aria-controls="carousel-l">Previous slide</button>
+      <button type="button" aria-controls="carousel-l">Next slide</button>
+      <div class="track" id="carousel-l" data-expect="warn" data-expect-notify="fail">
+        <div class="slide active">Event 1: Open house</div>
+        <div class="slide">Event 2: Book sale</div>
+        <div class="slide">Event 3: Story time</div>
+      </div>
+    </div>
+  </div>
+
+  <p>Filler paragraph forty-five.</p>
+  <p>Filler paragraph forty-six.</p>
+  <p>Filler paragraph forty-seven.</p>
+  <p>Filler paragraph forty-eight.</p>
+
+  <!-- (m) sits two levels under a page wrapper (as #root or #app does in an
+       app). A dialog opens one time inside the wrapper, on the carousel's
+       second rotation. It is not "next to" the carousel. -->
+  <div id="app-shell">
+    <div class="case">
+      <strong>(m) Carousel under a page wrapper, with an unrelated dialog (defect):</strong>
+      <p>A dialog opens in the same wrapper when the slide changes, one time. It says nothing about the slides.</p>
+      <div class="track" id="carousel-m" data-expect="warn" data-expect-notify="fail">
+        <div class="slide active">Offer 1: Free trial</div>
+        <div class="slide">Offer 2: Student price</div>
+        <div class="slide">Offer 3: Gift cards</div>
+      </div>
+    </div>
+  </div>
+
   <hr>
   <p><a href="index.html">← Back to index</a></p>
 
@@ -201,6 +280,60 @@
     // (h) Pause stops the rotation.
     const hTimer = setInterval(rotate(document.getElementById('carousel-h'), document.getElementById('carousel-h-status')), 1500);
     document.getElementById('carousel-h-pause').addEventListener('click', () => clearInterval(hTimer));
+
+    // (i) Different periods: the live counter changes about twice as often.
+    for (const [id, ms] of [['stat-visitors', 800], ['stat-price', 1700]]) {
+      const span = document.querySelector(`#${id} span`);
+      setInterval(() => {
+        span.textContent = String(Number(span.textContent) + 1);
+      }, ms);
+    }
+
+    // (j)
+    const bar = document.getElementById('progress-bar');
+    (function frame(t) {
+      bar.style.width = `${(t % 3000) / 30}%`;
+      requestAnimationFrame(frame);
+    })(0);
+
+    // (k)
+    const linkHeads = ['Markets close higher', 'Bus stop moved', 'High-speed rail opens'];
+    let lh = 0;
+    setInterval(() => {
+      lh = (lh + 1) % linkHeads.length;
+      document.querySelector('#link-ticker a.rotating').textContent = linkHeads[lh];
+    }, 1200);
+
+    // (l)
+    setInterval(rotate(document.getElementById('carousel-l')), 1500);
+
+    // (m) The dialog opens in the same task as the second rotation.
+    const mRotate = rotate(document.getElementById('carousel-m'));
+    let mTicks = 0;
+    setInterval(() => {
+      mRotate();
+      if (++mTicks !== 2) return;
+      const d = document.createElement('div');
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-label', 'Newsletter');
+      d.className = 'notice';
+      d.textContent = 'Sign up for our newsletter.';
+      document.getElementById('app-shell').appendChild(d);
+    }, 1500);
+
+    // A notice dialog opens ONE time, far from every case, 3 seconds after
+    // load; then its class changes every 1.5 seconds while it stays open.
+    // Neither is a notice for any case above (their data-expect-notify
+    // results must not change).
+    setTimeout(() => {
+      const d = document.createElement('div');
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-label', 'Site notice');
+      d.className = 'notice';
+      d.textContent = 'This site uses cookies.';
+      document.body.appendChild(d);
+      setInterval(() => d.classList.toggle('flash'), 1500);
+    }, 3000);
   </script>
 </body>
 </html>

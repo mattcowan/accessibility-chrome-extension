@@ -37,10 +37,11 @@ if (!globalThis.__a11yAutoUpdate) {
     const BURST_GAP_MS = 300; // changes closer than this are one update
     const CONTINUOUS_MS = 2000; // one update this long = content that keeps changing
     const INPUT_IGNORE_MS = 1000; // changes this soon after user input are the user's
-    const NOTIFY_MS = 1000; // a focus move or dialog this soon after an update notifies it
+    const NOTIFY_MS = 1000; // a focus move, dialog or live change this soon after an update notifies it
     const SCROLL_SAMPLE_MS = 200;
+    const DIALOG_REPEATS = 3; // dialogs elsewhere must open with this many updates
     const MAX_SCROLLERS = 200;
-    const MERGE_DEPTH = 3; // a changed block merges into a changed ancestor this close
+    const MERGE_DEPTH = 3; // "next to" for a live region: an ancestor this many levels up
     const WATCHED_ATTRS = ['class', 'style', 'hidden', 'aria-hidden', 'src', 'open'];
     // Trusted input only; pointerdown covers mouse, pen and touch (one event
     // per click, so the note's count is right). Not mousemove: the tester's
@@ -48,7 +49,9 @@ if (!globalThis.__a11yAutoUpdate) {
     // their own.
     const INPUT_EVENTS = ['pointerdown', 'keydown', 'wheel'];
     const NOISE_TAGS = new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE']);
-    const DIALOG_SELECTOR = 'dialog[open], [role="dialog"], [role="alertdialog"]';
+    // Every dialog, open or not; "open" = rendered (a closed <dialog> is
+    // display: none).
+    const DIALOG_SELECTOR = 'dialog, [role="dialog"], [role="alertdialog"]';
     const OBSERVE = {
       subtree: true,
       childList: true,
@@ -85,16 +88,28 @@ if (!globalThis.__a11yAutoUpdate) {
       }
     }
 
-    function isDialogShown(el) {
-      return el.nodeType === Node.ELEMENT_NODE && el.matches(DIALOG_SELECTOR) && rendered(el);
+    // Logs a dialog only when it OPENS: w.openDialogs holds the ones already
+    // shown (seeded at start), so a class or style change on an open dialog
+    // is not a new dialog.
+    function noteDialog(w, el, at) {
+      if (el.nodeType !== Node.ELEMENT_NODE || !el.matches(DIALOG_SELECTOR)) return;
+      if (rendered(el)) {
+        if (!w.openDialogs.has(el)) {
+          w.openDialogs.add(el);
+          w.dialogs.push({ el, at });
+        }
+      } else {
+        w.openDialogs.delete(el);
+      }
     }
 
     const now = () => performance.now();
 
-    function record(w, el, at) {
+    // kind: 'style' (an inline style write only), 'scroll', or 'content'.
+    function record(w, el, at, kind) {
       if (!el || el.nodeType !== Node.ELEMENT_NODE || !el.isConnected) return;
       if (isTool(el) || !insideBody(el)) return;
-      w.changes.push({ el, at, live: !!regionOf(el) });
+      w.changes.push({ el, at, kind, live: !!regionOf(el) });
     }
 
     const textOf = (nodes) => [...nodes].map((n) => n.textContent).join('');
@@ -105,22 +120,20 @@ if (!globalThis.__a11yAutoUpdate) {
 
     function onMutations(w, records) {
       const at = now();
-      const seen = new Set(); // one change per element per callback
-      const add = (el) => {
-        if (el && !seen.has(el)) {
-          seen.add(el);
-          record(w, el, at);
-        }
+      // One change per element per callback; 'content' wins over 'style'.
+      const seen = new Map();
+      const add = (el, kind) => {
+        if (el && seen.get(el) !== 'content') seen.set(el, kind);
       };
       for (const m of records) {
         if (m.type === 'attributes') {
           // Frameworks often re-set an attribute to the value it had.
           if (m.target.getAttribute(m.attributeName) === m.oldValue) continue;
-          add(m.target);
-          if (isDialogShown(m.target)) w.dialogs.push(at);
+          add(m.target, m.attributeName === 'style' ? 'style' : 'content');
+          noteDialog(w, m.target, at);
         } else if (m.type === 'characterData') {
           if (m.target.textContent === m.oldValue) continue;
-          add(m.target.parentElement);
+          add(m.target.parentElement, 'content');
         } else {
           const added = [...m.addedNodes].filter((n) => !isNoise(n));
           const removed = [...m.removedNodes].filter((n) => !isNoise(n));
@@ -128,13 +141,15 @@ if (!globalThis.__a11yAutoUpdate) {
           // Text replaced with the same text (a re-render) is no update.
           const allText = [...added, ...removed].every((n) => n.nodeType === Node.TEXT_NODE);
           if (allText && textOf(added) === textOf(removed)) continue;
-          add(m.target instanceof ShadowRoot ? m.target.host : m.target);
+          add(m.target instanceof ShadowRoot ? m.target.host : m.target, 'content');
           for (const n of added) {
             if (n.nodeType !== Node.ELEMENT_NODE) continue;
-            if (isDialogShown(n) || [...n.querySelectorAll(DIALOG_SELECTOR)].some(rendered)) w.dialogs.push(at);
+            noteDialog(w, n, at);
+            for (const d of n.querySelectorAll(DIALOG_SELECTOR)) noteDialog(w, d, at);
           }
         }
       }
+      for (const [el, kind] of seen) record(w, el, at, kind);
     }
 
     function shadowRoots() {
@@ -151,21 +166,22 @@ if (!globalThis.__a11yAutoUpdate) {
     }
 
     // Overflow containers that can scroll (not the page itself: the page
-    // scrolls when the user scrolls).
+    // scrolls when the user scrolls). capped: there were more than
+    // MAX_SCROLLERS, and the rest are not sampled (the page note says so).
     function scrollers() {
-      const out = [];
+      const list = [];
       const all = [];
-      if (!document.body) return out;
+      if (!document.body) return { list, capped: false };
       F.collectMatching(document.body, '*', all);
       for (const el of all) {
-        if (out.length >= MAX_SCROLLERS) break;
         if (el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1) continue;
         const s = getComputedStyle(el);
         if (!/auto|scroll|hidden/.test(`${s.overflowX} ${s.overflowY}`)) continue;
         if (isTool(el)) continue;
-        out.push({ el, x: el.scrollLeft, y: el.scrollTop });
+        if (list.length >= MAX_SCROLLERS) return { list, capped: true };
+        list.push({ el, x: el.scrollLeft, y: el.scrollTop });
       }
-      return out;
+      return { list, capped: false };
     }
 
     function start(seconds) {
@@ -178,21 +194,24 @@ if (!globalThis.__a11yAutoUpdate) {
         changes: [],
         inputs: [],
         focusins: [],
-        dialogs: [],
+        dialogs: [], // [{el, at}] for each dialog that opened during the watch
+        openDialogs: new Set([...document.querySelectorAll(DIALOG_SELECTOR)].filter(rendered)),
+        scrollersCapped: false,
       };
       const observer = new MutationObserver((records) => onMutations(w, records));
       observer.observe(document.documentElement, OBSERVE);
       for (const root of shadowRoots()) observer.observe(root, OBSERVE);
 
       const scroll = scrollers();
+      w.scrollersCapped = scroll.capped;
       const sampler = setInterval(() => {
         const at = now();
-        for (const s of scroll) {
+        for (const s of scroll.list) {
           if (!s.el.isConnected) continue;
           if (s.el.scrollLeft !== s.x || s.el.scrollTop !== s.y) {
             s.x = s.el.scrollLeft;
             s.y = s.el.scrollTop;
-            record(w, s.el, at);
+            record(w, s.el, at, 'scroll');
           }
         }
       }, SCROLL_SAMPLE_MS);
@@ -240,8 +259,10 @@ if (!globalThis.__a11yAutoUpdate) {
 
     // Group changes by region: each change's block, then (until stable)
     // sibling blocks with the same tag merge into their parent (a carousel's
-    // slides), and a block merges into a changed ancestor at most MERGE_DEPTH
-    // levels up (a slide into its track). Never up to <body>.
+    // slides), and a block merges into its parent when the parent changed too
+    // (a shown slide into its track). Only the parent: a one-time insertion
+    // into a page wrapper (#root, #app) a few levels up must not swallow a
+    // carousel inside it. Never up to <body>.
     function groupChanges(changes) {
       const groups = new Map();
       for (const c of changes) {
@@ -261,7 +282,9 @@ if (!globalThis.__a11yAutoUpdate) {
         for (const b of groups.keys()) {
           const p = composedParent(b);
           if (isPageRoot(p)) continue;
-          const key = `${b.tagName}`;
+          // Never merge a live block with a silent one: the merged region
+          // would count as live and hide the silent block's 2.D failure.
+          const key = `${b.tagName}|${groups.get(b).every((c) => c.live)}`;
           if (!byParent.has(p)) byParent.set(p, new Map());
           const tags = byParent.get(p);
           if (!tags.has(key)) tags.set(key, []);
@@ -275,13 +298,10 @@ if (!globalThis.__a11yAutoUpdate) {
           }
         }
         for (const b of [...groups.keys()]) {
-          let a = composedParent(b);
-          for (let d = 1; d <= MERGE_DEPTH && !isPageRoot(a); d++, a = composedParent(a)) {
-            if (groups.has(a)) {
-              merge(b, a);
-              changed = true;
-              break;
-            }
+          const a = composedParent(b);
+          if (!isPageRoot(a) && groups.has(a)) {
+            merge(b, a);
+            changed = true;
           }
         }
       }
@@ -319,28 +339,60 @@ if (!globalThis.__a11yAutoUpdate) {
     }
 
     // How the user is told about the updates (TT 2.D), or null for none.
-    // A live region counts when the changes are inside it, or when it sits
-    // near the region (inside an ancestor at most MERGE_DEPTH levels up, as a
-    // carousel's "Slide 2 of 4" status beside its track) and changed with at
-    // least half of the updates.
+    // "Scope" = the region's ancestor at most MERGE_DEPTH levels up (never
+    // body): what counts as "next to" the content.
+    //  1. live: every change is inside a live region.
+    //  2. live-beside: a live region in scope (a carousel's "Slide 2 of 4"
+    //     status beside its track) changed within NOTIFY_MS of at least half
+    //     of the silent updates AND changed about as often (±1). A live
+    //     counter beside the content that updates on its own schedule fails
+    //     the second test. One that changes at the very same moments cannot
+    //     be told from a slide status, so that stays review.
+    //  3. focus: focus moved into the region near an update.
+    //  4. dialog: a dialog OPENED near an update, and it holds the region or
+    //     is inside it; or dialogs opened near at least DIALOG_REPEATS
+    //     updates and 80% of them. A cookie modal that opens once, elsewhere,
+    //     is not a notice, and neither are two unrelated one-time dialogs.
     function notification(w, region, list, st, kept) {
       const nearBurst = (b, t) => t >= b.start - 100 && t <= b.end + NOTIFY_MS;
       const near = (t) => st.bursts.some((b) => nearBurst(b, t));
-      const own = list.find((c) => c.live && regionOf(c.el));
-      if (own) {
+      let scope = region;
+      for (let d = 0; d < MERGE_DEPTH && !isPageRoot(composedParent(scope)); d++) scope = composedParent(scope);
+
+      const own = list.find((c) => regionOf(c.el));
+      if (own && list.every((c) => c.live)) {
         const lr = regionOf(own.el);
         return { kind: 'live', region: lr, politeness: politenessFor(lr) };
       }
-      let scope = region;
-      for (let d = 0; d < MERGE_DEPTH && !isPageRoot(composedParent(scope)); d++) scope = composedParent(scope);
-      const beside = kept.filter((c) => c.live && scope.contains(c.el) && !region.contains(c.el) && regionOf(c.el));
-      const hits = st.bursts.filter((b) => beside.some((c) => nearBurst(b, c.at))).length;
-      if (hits && hits * 2 >= st.bursts.length) {
-        const lr = regionOf(beside.find((c) => near(c.at)).el);
-        return { kind: 'live-beside', region: lr, politeness: politenessFor(lr) };
+
+      const sorted = (arr) => arr.sort((a, b) => a - b);
+      const silent = burstsOf(sorted(list.filter((c) => !c.live).map((c) => c.at)));
+      const byLive = new Map(); // live region -> change times in scope
+      for (const c of kept) {
+        if (!c.live || !scope.contains(c.el)) continue;
+        const lr = regionOf(c.el);
+        if (!lr) continue;
+        if (!byLive.has(lr)) byLive.set(lr, []);
+        byLive.get(lr).push(c.at);
       }
+      for (const [lr, times] of byLive) {
+        const liveBursts = burstsOf(sorted(times));
+        const hits = silent.filter((b) => times.some((t) => nearBurst(b, t))).length;
+        if (hits && hits * 2 >= silent.length && Math.abs(liveBursts.length - silent.length) <= 1) {
+          return { kind: 'live-beside', region: lr, politeness: politenessFor(lr) };
+        }
+      }
+
       if (w.focusins.some((f) => f.el && region.contains(f.el) && near(f.at))) return { kind: 'focus' };
-      if (w.dialogs.some(near)) return { kind: 'dialog' };
+
+      // Dialogs use no scope: "next to" can climb to a page wrapper (#root,
+      // #app) that holds every dialog on the page.
+      const related = w.dialogs.find((d) => near(d.at) && (d.el.contains(region) || region.contains(d.el)));
+      if (related) return { kind: 'dialog', dialog: related.el };
+      const repeats = st.bursts.filter((b) => w.dialogs.some((d) => nearBurst(b, d.at))).length;
+      if (repeats >= DIALOG_REPEATS && repeats >= 0.8 * st.bursts.length) {
+        return { kind: 'dialog', dialog: w.dialogs.find((d) => near(d.at)).el };
+      }
       return null;
     }
 
@@ -386,14 +438,24 @@ if (!globalThis.__a11yAutoUpdate) {
           severity = 'warn';
           details =
             `Content here updates automatically. ${updates} No control to pause, stop, or hide it, or to set how often it updates, was found: ` +
-            'no control named pause, stop, play, hide, close, or speed, and no control with aria-controls on this content. ' +
+            'no control whose name starts with pause, stop, play, hide, freeze, speed, or auto-rotate (or set, change, or toggle one of them). ' +
             'WCAG 2.2.2 (Trusted Tester 2.C) needs one unless the updates are essential. Decide whether the essential exception applies.';
         }
         findings.push(makeFinding({ tool: 'auto-update', wcag: '2.2.2', severity, el, details }));
 
         const n = notification(w, el, list, st, kept);
+        // Inline style writes only (a script animation, a moving element, a
+        // progress bar): the checker cannot tell decoration from new
+        // information, so no notice is review, not fail.
+        const styleOnly = list.every((c) => c.kind === 'style');
         let nDetails;
-        if (!n) {
+        let nSeverity = 'review';
+        if (!n && styleOnly) {
+          nDetails =
+            `${updates} Only inline styles changed (a script animation, a moving element, or a progress bar), and the user is not told about it: no live region, no focus move, no dialog. ` +
+            'If the change shows new information, such as slides that a transform moves into view, Trusted Tester 2.D needs a notice. If it is decoration only, 2.D does not apply. Check which.';
+        } else if (!n) {
+          nSeverity = 'fail';
           nDetails =
             `${updates} The user is not told about the updates: the content is not in a live region, focus did not move to it, and no dialog opened (Trusted Tester 2.D). ` +
             'A screen reader user does not know that it changed.';
@@ -403,14 +465,14 @@ if (!globalThis.__a11yAutoUpdate) {
             'Confirm that the announcement describes the change. A live region that announces every rotation can also disrupt reading, which is a 2.2.2 question.';
         } else if (n.kind === 'live-beside') {
           nDetails =
-            `${updates} A live region next to this content (${globalThis.__a11ySelector(n.region)}, ${n.politeness}) changed when it updated (Trusted Tester 2.D). ` +
-            'Confirm that the announcement describes this change.';
+            `${updates} A live region in or next to this content (${globalThis.__a11ySelector(n.region)}, ${n.politeness}) changed each time it updated (Trusted Tester 2.D). ` +
+            'The checker cannot tell whether it describes this change or other content. Confirm that the announcement describes this change.';
         } else if (n.kind === 'focus') {
           nDetails = `${updates} Focus moved into this content when it updated (Trusted Tester 2.D). Confirm that the content describes the change when it gets focus.`;
         } else {
-          nDetails = `${updates} A dialog opened when this content updated (Trusted Tester 2.D). Confirm that the dialog describes the change and that a keyboard user can reach and close it.`;
+          nDetails = `${updates} A dialog (${globalThis.__a11ySelector(n.dialog)}) opened when this content updated (Trusted Tester 2.D). Confirm that the dialog describes the change and that a keyboard user can reach and close it.`;
         }
-        findings.push(makeFinding({ tool: 'auto-update', wcag: '4.1.2', severity: n ? 'review' : 'fail', el, details: nDetails }));
+        findings.push(makeFinding({ tool: 'auto-update', wcag: '4.1.2', severity: nSeverity, el, details: nDetails }));
       }
 
       // One page-level note, only when the run had a caveat.
@@ -423,6 +485,11 @@ if (!globalThis.__a11yAutoUpdate) {
       if (w.inputs.length) {
         notes.push(
           `User input (a key press, click, touch, or wheel scroll) happened ${w.inputs.length} time${w.inputs.length === 1 ? '' : 's'} during the watch, so ${ignored} change${ignored === 1 ? '' : 's'} in the second after it ${ignored === 1 ? 'was' : 'were'} ignored. Run again without touching the page.`
+        );
+      }
+      if (w.scrollersCapped) {
+        notes.push(
+          `The page has more than ${MAX_SCROLLERS} scrolling containers. Only the first ${MAX_SCROLLERS} were watched for scroll movement, so a carousel that moves by scrolling further down the page can be missed. Check those by hand.`
         );
       }
       if (notes.length) {

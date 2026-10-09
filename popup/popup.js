@@ -11,7 +11,8 @@ const OVERLAY = 'checkers/lib/overlay.js';
 // The popup's own page-side helpers (reveal, highlight, markers).
 const OPS = 'checkers/lib/ops.js';
 const REVEAL_FILES = ['checkers/lib/resolve.js', OVERLAY, OPS];
-// Mechanism finder for auto-playing content (TT 2.A / 2.B); needs accname.
+// Mechanism finder for auto-playing and auto-updating content (TT 2.A, 2.B,
+// 2.C); needs accname.
 const MECHANISM = ['checkers/lib/accname.js', 'checkers/lib/mechanism.js'];
 // Focus-indicator style diff shared by the Focus visibility walker and the
 // focus locator.
@@ -21,6 +22,7 @@ const LOCATOR_FILES = [...LIBS, 'checkers/lib/accname.js', FOCUS_STYLE, 'checker
 // (and for Chrome's tab "audible" flag, which lags a moment) before checking.
 const RECORD_SETTLE_MS = 4000;
 let recordingAudio = false; // Reload and record in progress (side panel guards)
+let autoUpdateRunning = false; // an Auto-update watch is counting down (side panel guard)
 let tabSwitchedWhileRecording = false; // side panel: re-sync once recording ends
 // Live-region detection, shared by the monitor, Error capture and the Input
 // watcher.
@@ -808,9 +810,22 @@ async function initAutoUpdateSeconds() {
 // Auto-update (2.2.2 / TT 2.C, 4.1.2 / TT 2.D): the page watches itself for
 // the set time; this page waits it out with a visible countdown, then
 // collects. Top frame only. Like Reload and record, it holds the tab: if the
-// side panel switched tabs meanwhile, the run is abandoned (the page-side
-// watch ends on its own).
+// side panel switches tabs meanwhile, the countdown stops at once and the run
+// is abandoned (the page-side watch ends on its own). autoUpdateRunning keeps
+// the Run button disabled through the panel's restricted-UI reset, so a
+// second run cannot share the countdown.
 async function execAutoUpdate(entry) {
+  autoUpdateRunning = true;
+  $('run-auto-update').disabled = true;
+  try {
+    return await watchAndCollect(entry);
+  } finally {
+    autoUpdateRunning = false;
+    $('run-auto-update').disabled = restricted;
+  }
+}
+
+async function watchAndCollect(entry) {
   const seconds = parseWatchSeconds($('auto-update-seconds').value);
   const watchedTabId = tab.id;
   await inject([...LIBS, ...entry.files]);
@@ -822,9 +837,9 @@ async function execAutoUpdate(entry) {
   const progress = $('auto-update-progress');
   const endAt = Date.now() + seconds * 1000;
   try {
-    for (let left = endAt - Date.now(); left > 0; left = endAt - Date.now()) {
+    for (let left = endAt - Date.now(); left > 0 && tab.id === watchedTabId; left = endAt - Date.now()) {
       progress.textContent = `Watching… ${Math.ceil(left / 1000)} s`;
-      await sleep(Math.min(1000, left));
+      await sleep(Math.min(250, left));
     }
   } finally {
     progress.textContent = '';
@@ -1358,6 +1373,7 @@ function setRestrictedUI(on) {
     const reflowBatchBox = document.querySelector('.batch-select[data-batch-id="reflow"]');
     if (reflowBatchBox) reflowBatchBox.disabled = !reflowOn;
     $('record-audio').disabled = recordingAudio;
+    $('run-auto-update').disabled = autoUpdateRunning;
   }
 }
 
