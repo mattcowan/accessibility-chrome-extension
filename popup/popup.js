@@ -813,7 +813,8 @@ async function initAutoUpdateSeconds() {
 // side panel switches tabs meanwhile, the countdown stops at once and the run
 // is abandoned (the page-side watch ends on its own). autoUpdateRunning keeps
 // the Run button disabled through the panel's restricted-UI reset, so a
-// second run cannot share the countdown.
+// second run cannot share the countdown. entry.resume: pick up a watch that
+// an earlier popup started (see resumeAutoUpdate) instead of starting one.
 async function execAutoUpdate(entry) {
   autoUpdateRunning = true;
   $('run-auto-update').disabled = true;
@@ -826,16 +827,29 @@ async function execAutoUpdate(entry) {
 }
 
 async function watchAndCollect(entry) {
-  const seconds = parseWatchSeconds($('auto-update-seconds').value);
   const watchedTabId = tab.id;
   await inject([...LIBS, ...entry.files]);
-  const [start] = await callChecker('autoUpdate', { action: 'start', seconds });
-  if (start.result && start.result.busy) {
-    throw new Error('Auto-update is already watching this page (from the popup or the side panel). Wait for it to finish.');
+  let endAt;
+  if (entry.resume) {
+    const [st] = await callChecker('autoUpdate', { action: 'status' });
+    const status = st.result || {};
+    if (!status.active && !status.finished) return { tool: 'auto-update', count: 0, note: 'no earlier watch to collect' };
+    endAt = Date.now() + (status.remainingMs || 0);
+    announce(
+      status.active
+        ? `auto-update: a watch started earlier is still running. Results in ${Math.ceil(status.remainingMs / 1000)} seconds. Do not touch the page.`
+        : 'auto-update: collecting a watch that ended while no popup was open.'
+    );
+  } else {
+    const seconds = parseWatchSeconds($('auto-update-seconds').value);
+    const [start] = await callChecker('autoUpdate', { action: 'start', seconds });
+    if (start.result && start.result.busy) {
+      throw new Error('Auto-update is already watching this page (from the popup or the side panel). Wait for it to finish.');
+    }
+    announce(`auto-update: watching the page for ${seconds} seconds. Do not touch the page.`);
+    endAt = Date.now() + seconds * 1000;
   }
-  announce(`auto-update: watching the page for ${seconds} seconds. Do not touch the page.`);
   const progress = $('auto-update-progress');
-  const endAt = Date.now() + seconds * 1000;
   try {
     for (let left = endAt - Date.now(); left > 0 && tab.id === watchedTabId; left = endAt - Date.now()) {
       progress.textContent = `Watching… ${Math.ceil(left / 1000)} s`;
@@ -957,18 +971,18 @@ async function refreshTextSpacingButton() {
   }
 }
 
-async function refreshAccnameButton() {
+async function refreshAccnameButton(markers = pageMarkers()) {
   try {
-    const m = await pageMarkers();
+    const m = await markers;
     $('toggle-accname').textContent = m.accname ? 'Stop inspector' : 'Start inspector';
   } catch {
     // leave default label
   }
 }
 
-async function refreshFocusLocatorButton() {
+async function refreshFocusLocatorButton(markers = pageMarkers()) {
   try {
-    const m = await pageMarkers();
+    const m = await markers;
     $('toggle-focus-locator').textContent = m.focusLocator ? 'Stop locator' : 'Start locator';
   } catch {
     // leave default label
@@ -991,12 +1005,12 @@ async function refreshErrorCaptureButton() {
 
 // "Resume" when the SW still holds an active log but the page script is gone
 // (the page navigated): starting again continues the same log.
-async function refreshInputWatcherButton() {
+async function refreshInputWatcherButton(markers = pageMarkers()) {
   const key = `watch:${tab.id}`;
   const sw = (await chrome.storage.session.get(key))[key];
   const idle = sw && sw.active ? 'Resume watcher' : 'Start watcher';
   try {
-    const m = await pageMarkers();
+    const m = await markers;
     $('toggle-input-watcher').textContent = m.inputWatcher ? 'Stop watcher' : idle;
   } catch {
     // No access to the page (side panel after a tab switch): the SW log still
@@ -1005,9 +1019,27 @@ async function refreshInputWatcherButton() {
   }
 }
 
-async function refreshLiveRegionsButton() {
+// A popup closes when the tester clicks the page, which kills its Auto-update
+// countdown. The page keeps watching and marks the watch (data-a11y-auto-update);
+// the next popup or panel refresh resumes the countdown, or collects the
+// watch at once if it has ended.
+async function resumeAutoUpdate(markers) {
+  if (autoUpdateRunning) return;
+  const tabId = tab.id;
+  let m;
   try {
-    const m = await pageMarkers();
+    m = await markers;
+  } catch {
+    return;
+  }
+  // The markers belong to tabId; the side panel may have switched since.
+  if (!m || !m.autoUpdate || autoUpdateRunning || tab.id !== tabId) return;
+  runFromButton($('run-auto-update'), { ...CHECKERS.find((c) => c.id === 'auto-update'), resume: true });
+}
+
+async function refreshLiveRegionsButton(markers = pageMarkers()) {
+  try {
+    const m = await markers;
     $('toggle-live-regions').textContent = m.liveMonitor ? 'Stop monitor' : 'Start monitor';
   } catch {
     // leave default label
@@ -1055,11 +1087,12 @@ function wireCheckers() {
       if (problems.length) banner(problems.join(' '));
       // The reload reset page-side tool state; re-sync the toggle labels.
       refreshTextSpacingButton();
-      refreshAccnameButton();
-      refreshLiveRegionsButton();
-      refreshFocusLocatorButton();
+      const markers = pageMarkers();
+      refreshAccnameButton(markers);
+      refreshLiveRegionsButton(markers);
+      refreshFocusLocatorButton(markers);
       refreshErrorCaptureButton();
-      refreshInputWatcherButton();
+      refreshInputWatcherButton(markers);
     } catch (err) {
       checkerError(err);
     } finally {
@@ -1404,11 +1437,14 @@ async function refreshForActiveTab() {
   if (token !== refreshToken) return;
   renderReport(store);
   refreshTextSpacingButton();
-  refreshAccnameButton();
-  refreshLiveRegionsButton();
-  refreshFocusLocatorButton();
+  // One read of the page markers for every label (and a watch to resume).
+  const markers = pageMarkers();
+  refreshAccnameButton(markers);
+  refreshLiveRegionsButton(markers);
+  refreshFocusLocatorButton(markers);
   refreshErrorCaptureButton();
-  refreshInputWatcherButton();
+  refreshInputWatcherButton(markers);
+  resumeAutoUpdate(markers);
   // Catch up on watcher entries logged while no popup was open (a
   // navigation, for example).
   syncWatchFindings().catch(() => {});

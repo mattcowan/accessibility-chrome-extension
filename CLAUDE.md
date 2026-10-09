@@ -122,7 +122,14 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   carousels fire no mutations), trusted-input listeners and a focusin log; the
   watch ends itself after N s. The popup's `execAutoUpdate` waits with a visible
   countdown (`#auto-update-progress`), then `collect` (awaits the end) reports —
-  never one long executeScript. Changes within 1 s after trusted input are dropped.
+  never one long executeScript. The DOM marker `data-a11y-auto-update` is
+  `watching`/`done` until collected: the action popup closes when the tester
+  clicks the page (killing its countdown), so `refreshForActiveTab` →
+  `resumeAutoUpdate` resumes the countdown or collects the finished watch (PR #26
+  review). `status` → `{active, finished, seconds, remainingMs}`. Time the tab
+  spent hidden (`visibilitychange`) ≥1 s adds a page note: hidden tabs throttle
+  timers and many carousels pause. Playwright keeps every page visible, so E2E
+  fakes it with an isolated-world `document.hidden` own property. Changes within 1 s after trusted input are dropped.
   Grouping: each change's nearest box-making ancestor (display not none/contents/
   inline; never body/html), then same-tag siblings merge into their parent (slides)
   and a block merges into its PARENT when the parent changed too (parent only: a
@@ -148,7 +155,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   fail" contract outranks #14's "none → fail"). Same-tag siblings never merge when
   one is all-live and the other is not. Dialogs shown by a class on a wrapper
   ancestor are not seen. A `(page)` review appears ONLY when reduced motion was on,
-  input happened, or there were more than 200 scrolling containers (the rest are not
+  input happened, the tab was hidden ≥1 s, or there were more than 200 scrolling containers (the rest are not
   sampled), so a static page has zero findings. The
   watch time (`#auto-update-seconds`, `parseWatchSeconds`: whole seconds, default
   10, max 300) is kept in `chrome.storage.local` `autoUpdateSeconds`.
@@ -253,7 +260,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   watcher's content script (top frame, tab from `sender.tab`), `exec {files,
   allFrames}` (→ `{ok}`) and `exec {global, method, args, allFrames}` (→ `{ok,
   results: [{frameId, result}]}`; extension pages only — `sender.url` must be the
-  extension's origin), `resetTab`. Pages also
+  extension's origin; only the global's OWN function properties can be called; a
+  top-frame exception returns `{ok:false, error}`, a subframe exception only nulls
+  that frame's result), `resetTab`. Pages also
   post `errorCaptureUpdate` (a `PAGE_NOTICES` type: the SW returns false and never
   answers it; popup/panel consume it). Reload and record,
   `clickListeners` and the hover probe (start→end) take an in-memory per-tab
@@ -316,6 +325,11 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   add a popup-side `chrome.scripting` call (#15). The E2E `[#15]` section guards
   this, probing from the SW. The audio checker still does not read
   `hasBeenActive`: the tester's own page clicks set it too.
+- **An exception inside a `chrome.scripting.executeScript` function does NOT
+  reject the call** — that frame's result is just `null` (verified 2026-10-09). Until
+  the PR #26 review, a crashed checker therefore read as a clean "0 findings". The
+  `exec` wrapper catches and returns `{error}`; keep it that way, and never treat a
+  null result as "nothing found" in new code.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,
   `prefers-reduced-transparency`) are capability-probed on first attach and their UI
   hidden if rejected — keep the probe when adding features.
@@ -325,7 +339,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 267 checks on 2026-10-09 after the #9 review rounds (249 before them; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 275 checks on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

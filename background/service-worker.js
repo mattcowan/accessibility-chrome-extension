@@ -110,7 +110,8 @@ async function handle(msg, sender) {
 //   {files, allFrames}                  -> {ok}
 //   {global, method, args, allFrames}   -> {ok, results: [{frameId, result}]}
 // The call form runs globalThis[global][method](...args) in the isolated
-// world; only the namespaces below can be called.
+// world; only the namespaces below can be called, and only their own
+// function properties (not inherited names such as constructor).
 const EXEC_GLOBALS = new Set(['__a11yCheckers', '__a11yHover', '__a11yOps']);
 
 async function handleExec(msg, sender) {
@@ -128,12 +129,32 @@ async function handleExec(msg, sender) {
   if (!EXEC_GLOBALS.has(msg.global) || typeof msg.method !== 'string') {
     return { ok: false, error: `exec cannot call ${msg.global}.${msg.method}` };
   }
+  // An error thrown inside an injected function does NOT reject
+  // executeScript: that frame's result is just null (verified 2026-10-09).
+  // A crashed checker would read as "0 findings". So the wrapper catches and
+  // returns the error, and a top-frame error fails the call. An error in a
+  // subframe only drops that frame's result, as before.
   const results = await chrome.scripting.executeScript({
     target,
-    func: (g, m, a) => globalThis[g][m](...a),
+    func: async (g, m, a) => {
+      try {
+        const o = globalThis[g];
+        if (!o || !Object.hasOwn(o, m) || typeof o[m] !== 'function') {
+          throw new Error(`exec: ${g}.${m} is not a page method (inject its file first)`);
+        }
+        return { value: await o[m](...a) };
+      } catch (e) {
+        return { error: (e && e.message) || String(e) };
+      }
+    },
     args: [msg.global, msg.method, Array.isArray(msg.args) ? msg.args : []],
   });
-  return { ok: true, results: results.map((r) => ({ frameId: r.frameId, result: r.result })) };
+  const top = results.find((r) => r.frameId === 0);
+  if (top && top.result && top.result.error) return { ok: false, error: top.result.error };
+  return {
+    ok: true,
+    results: results.map((r) => ({ frameId: r.frameId, result: r.result && !r.result.error ? r.result.value : null })),
+  };
 }
 
 // Debugger holds (see debugger-manager.js) for the click-listener read and

@@ -543,6 +543,73 @@ try {
     await env.popup.waitForFunction(() => !document.getElementById('run-auto-update').disabled, null, { timeout: 20000 });
     const reloaded = await env.popup.evaluate(() => document.getElementById('banner').textContent);
     check('[auto-update] a reload during the watch says nothing was reported', /navigated or reloaded during the auto-update watch/.test(reloaded), reloaded);
+
+    // A hidden tab during the watch gets a page note (timers slow down).
+    // Playwright keeps every page visible, even behind another tab, so the
+    // test hides it for 2 s in the checker's own (isolated) world: an
+    // own-property document.hidden plus a visibilitychange event.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(300);
+    const [swHide] = env.ctx.serviceWorkers();
+    const setHidden = (hidden) =>
+      swHide.evaluate(async ({ tabId, hidden }) => {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (h) => {
+            if (h) Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+            else delete document.hidden;
+            document.dispatchEvent(new Event('visibilitychange'));
+          },
+          args: [hidden],
+        });
+      }, { tabId, hidden });
+    await setHidden(true);
+    await sleep(2000);
+    await setHidden(false);
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const hiddenNote = ((await storedFindings(env, tabId, 'auto-update')).find((x) => x.selector === '(page)') || {}).details || '';
+    check('[auto-update] a tab hidden during the watch gets a page note', /The tab was hidden for [12] of the 3 seconds/.test(hiddenNote), hiddenNote);
+
+    // exec calls only a page object's own function properties.
+    const bad = await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'exec', tabId, global: '__a11yCheckers', method: 'constructor', args: [] }), tabId);
+    check('[exec] an inherited name (constructor) is refused with a clear error', bad && !bad.ok && /not a page method/.test(bad.error), JSON.stringify(bad));
+    // A checker that throws is reported, not read as a clean "0 findings"
+    // (executeScript itself returns null for a thrown error).
+    const thrown = await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'exec', tabId, global: '__a11yCheckers', method: 'autoUpdate', args: [{ action: 'bogus' }] }), tabId);
+    check('[exec] a checker that throws fails the call with its message', thrown && !thrown.ok && /Unknown autoUpdate action/.test(thrown.error), JSON.stringify(thrown));
+    await page.close();
+  }
+  // The action popup closes when the tester clicks the page, which kills its
+  // countdown. The page keeps watching; the next popup picks the watch up.
+  {
+    const { page, tabId } = await openFixture(env, 'auto-update.html', 500);
+    const popupUrl = env.popup.url();
+    const marker = () => page.evaluate(() => document.documentElement.dataset.a11yAutoUpdate || null);
+    // (1) Reopened while the watch still runs: resumes the countdown.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(800);
+    check('[auto-update] the page marks a running watch', (await marker()) === 'watching', String(await marker()));
+    await env.popup.goto('about:blank'); // the popup closes
+    await env.popup.goto(popupUrl);
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const resumed = await storedFindings(env, tabId, 'auto-update');
+    check('[auto-update] a reopened popup resumes the running watch and collects it', severityFor(resumed, '#carousel-a', '2.2.2') === 'warn', JSON.stringify(resumed.map((x) => [x.wcag, x.severity, x.selector])));
+    check('[auto-update] collect removes the page marker', (await marker()) === null, String(await marker()));
+    // (2) Reopened after the watch ended: collects at once.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.click('#run-auto-update');
+    await sleep(500);
+    await env.popup.goto('about:blank');
+    await sleep(3500);
+    check('[auto-update] the page marks a finished, uncollected watch', (await marker()) === 'done', String(await marker()));
+    await env.popup.goto(popupUrl);
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 10000 });
+    const late = await storedFindings(env, tabId, 'auto-update');
+    check('[auto-update] a popup opened after the watch ended collects it', severityFor(late, '#carousel-a', '2.2.2') === 'warn', JSON.stringify(late.map((x) => [x.wcag, x.severity, x.selector])));
     await page.close();
   }
   // Batch runs it (first in the registry).

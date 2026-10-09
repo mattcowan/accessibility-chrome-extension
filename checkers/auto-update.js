@@ -12,7 +12,12 @@
 //       during it, so the popup must not report a clean page). The popup waits out the
 //       watch in its own page (with a countdown) rather than inside one long
 //       executeScript, so no single call outlives a service-worker timeout.
-//   __a11yCheckers.autoUpdate({action: 'status'}) -> {active, seconds}
+//   __a11yCheckers.autoUpdate({action: 'status'})
+//       -> {active, finished, seconds, remainingMs}
+// The DOM marker data-a11y-auto-update is 'watching' during a watch and
+// 'done' after it until it is collected. A popup closes when the tester
+// clicks the page, which kills its countdown; the next popup (or the side
+// panel) sees the marker and collects the watch instead of losing it.
 // Needs selector.js, findings.js, accname.js, mechanism.js and lib/live.js.
 //
 // What counts as an update: a MutationObserver sees text, child-list and
@@ -197,6 +202,8 @@ if (!globalThis.__a11yAutoUpdate) {
         dialogs: [], // [{el, at}] for each dialog that opened during the watch
         openDialogs: new Set([...document.querySelectorAll(DIALOG_SELECTOR)].filter(rendered)),
         scrollersCapped: false,
+        hiddenMs: 0, // time the tab was hidden (timers slow down, carousels often pause)
+        hiddenSince: document.hidden ? now() : null,
       };
       const observer = new MutationObserver((records) => onMutations(w, records));
       observer.observe(document.documentElement, OBSERVE);
@@ -220,6 +227,14 @@ if (!globalThis.__a11yAutoUpdate) {
         if (e.isTrusted) w.inputs.push(now());
       };
       const onFocus = (e) => w.focusins.push({ el: e.composedPath()[0], at: now() });
+      const onVisibility = () => {
+        if (document.hidden) w.hiddenSince = now();
+        else if (w.hiddenSince !== null) {
+          w.hiddenMs += now() - w.hiddenSince;
+          w.hiddenSince = null;
+        }
+      };
+      document.addEventListener('visibilitychange', onVisibility);
       for (const type of INPUT_EVENTS) window.addEventListener(type, onInput, { capture: true, passive: true });
       document.addEventListener('focusin', onFocus, true);
 
@@ -230,12 +245,16 @@ if (!globalThis.__a11yAutoUpdate) {
           clearInterval(sampler);
           for (const type of INPUT_EVENTS) window.removeEventListener(type, onInput, { capture: true });
           document.removeEventListener('focusin', onFocus, true);
+          document.removeEventListener('visibilitychange', onVisibility);
           w.endedAt = now();
+          if (w.hiddenSince !== null) w.hiddenMs += w.endedAt - w.hiddenSince;
           w.finished = true;
+          document.documentElement.dataset.a11yAutoUpdate = 'done';
           resolve();
         }, seconds * 1000);
       });
       watch = w;
+      document.documentElement.dataset.a11yAutoUpdate = 'watching';
       return { active: true, seconds };
     }
 
@@ -487,6 +506,11 @@ if (!globalThis.__a11yAutoUpdate) {
           `User input (a key press, click, touch, or wheel scroll) happened ${w.inputs.length} time${w.inputs.length === 1 ? '' : 's'} during the watch, so ${ignored} change${ignored === 1 ? '' : 's'} in the second after it ${ignored === 1 ? 'was' : 'were'} ignored. Run again without touching the page.`
         );
       }
+      if (w.hiddenMs >= 1000) {
+        notes.push(
+          `The tab was hidden for ${Math.round(w.hiddenMs / 1000)} of the ${Math.round(watchedMs / 1000)} seconds. Browsers slow timers in a hidden tab, and many carousels pause, so this run can miss updates. Keep the tab visible and run again.`
+        );
+      }
       if (w.scrollersCapped) {
         notes.push(
           `The page has more than ${MAX_SCROLLERS} scrolling containers. Only the first ${MAX_SCROLLERS} were watched for scroll movement, so a carousel that moves by scrolling further down the page can be missed. Check those by hand.`
@@ -515,9 +539,17 @@ if (!globalThis.__a11yAutoUpdate) {
         }
         case 'collect':
           if (!watch) return { missing: true };
-          return watch.done.then(() => report(watch));
+          return watch.done.then(() => {
+            delete document.documentElement.dataset.a11yAutoUpdate;
+            return report(watch);
+          });
         case 'status':
-          return { active: !!(watch && !watch.finished), seconds: watch ? watch.seconds : null };
+          return {
+            active: !!(watch && !watch.finished),
+            finished: !!(watch && watch.finished),
+            seconds: watch ? watch.seconds : null,
+            remainingMs: watch && !watch.finished ? Math.max(0, watch.startedAt + watch.seconds * 1000 - now()) : 0,
+          };
         default:
           throw new Error(`Unknown autoUpdate action: ${action}`);
       }
