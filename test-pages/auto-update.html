@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto-Updating Content</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .case { margin: 1.5rem 0; padding: 1rem; border: 2px solid #999; background: #f9f9f9; }
+    .slide { display: none; padding: 1rem; background: #dbeafe; }
+    .slide.active { display: block; }
+    .scroller { width: 300px; overflow: hidden; white-space: nowrap; border: 1px solid #999; }
+    .panel { display: inline-block; width: 300px; padding: 1rem 0; text-align: center; background: #fef3c7; }
+    .bar-track { width: 300px; height: 12px; background: #e5e7eb; }
+    .bar { height: 12px; width: 0; background: #2563eb; }
+    .notice { padding: 0.5rem; border: 2px solid #b45309; background: #fffbeb; }
+    .notice.flash { background: #fde68a; }
+  </style>
+</head>
+<body>
+  <!--
+    WCAG 2.2.2 / Trusted Tester 2.C and 2.D fixture for the Auto-update
+    checker. data-expect is the 2.2.2 (TT 2.C) grade; data-expect-notify is
+    the 4.1.2 (TT 2.D) grade. TT 2.C accepts a control within the first three
+    elements OR within three elements before/after the content. The first
+    three elements (h1 and two paragraphs) hold no control, and filler
+    paragraphs keep each case's controls away from the next case.
+  -->
+  <h1>Auto-Updating Content</h1>
+  <p>Each case below updates on its own, or does not, in a different way.</p>
+  <p>Nothing in the first three elements of this page is a control.</p>
+
+  <div class="case">
+    <strong>(a) Rotating carousel, no controls (defect):</strong>
+    <p>The slide changes every 1.5 seconds. There is no pause control and no live region.</p>
+    <div class="carousel">
+      <div class="track" id="carousel-a" data-expect="warn" data-expect-notify="fail">
+        <div class="slide active">Slide 1: Spring sale</div>
+        <div class="slide">Slide 2: New arrivals</div>
+        <div class="slide">Slide 3: Free shipping</div>
+      </div>
+    </div>
+  </div>
+
+  <p>Filler paragraph one.</p>
+  <p>Filler paragraph two.</p>
+  <p>Filler paragraph three.</p>
+  <p>Filler paragraph four.</p>
+
+  <div class="case">
+    <strong>(b) News ticker with a pause button directly after it:</strong>
+    <p>The headline changes every 1.2 seconds. It is not a live region.</p>
+    <p id="ticker" data-expect="review" data-expect-notify="fail">Headline 1: Markets open higher</p>
+    <button type="button" id="ticker-pause">Pause</button>
+  </div>
+
+  <p>Filler paragraph five.</p>
+  <p>Filler paragraph six.</p>
+  <p>Filler paragraph seven.</p>
+  <p>Filler paragraph eight.</p>
+
+  <div class="case">
+    <strong>(c) Content that changes only on click (pass):</strong>
+    <p>Nothing changes unless a user activates the button.</p>
+    <button type="button" id="tip-btn">Show another tip</button>
+    <p id="tip" data-expect="pass" data-expect-notify="pass">Tip 1: Save your work often.</p>
+  </div>
+
+  <p>Filler paragraph nine.</p>
+  <p>Filler paragraph ten.</p>
+  <p>Filler paragraph eleven.</p>
+  <p>Filler paragraph twelve.</p>
+
+  <div class="case">
+    <strong>(d) Content inserted one time after load (pass):</strong>
+    <p>A notice is added 2.5 seconds after load and never changes again.</p>
+    <div id="late-slot" data-expect="pass" data-expect-notify="pass"></div>
+  </div>
+
+  <p>Filler paragraph thirteen.</p>
+  <p>Filler paragraph fourteen.</p>
+  <p>Filler paragraph fifteen.</p>
+  <p>Filler paragraph sixteen.</p>
+
+  <div class="case">
+    <strong>(e) Counter in a polite live region:</strong>
+    <p>The count goes up every second, and screen readers can announce it.</p>
+    <p id="counter-live" aria-live="polite" data-expect="warn" data-expect-notify="review">Visitors online: <span>40</span></p>
+  </div>
+
+  <p>Filler paragraph seventeen.</p>
+  <p>Filler paragraph eighteen.</p>
+  <p>Filler paragraph nineteen.</p>
+  <p>Filler paragraph twenty.</p>
+
+  <div class="case">
+    <strong>(f) The same counter with no live region (defect):</strong>
+    <p>The count goes up every second. Nothing tells a screen reader user.</p>
+    <p id="counter-silent" data-expect="warn" data-expect-notify="fail">Visitors online: <span>40</span></p>
+  </div>
+
+  <p>Filler paragraph twenty-one.</p>
+  <p>Filler paragraph twenty-two.</p>
+  <p>Filler paragraph twenty-three.</p>
+  <p>Filler paragraph twenty-four.</p>
+
+  <div class="case">
+    <strong>(g) Carousel that moves by scrolling (defect):</strong>
+    <p>A script sets scrollLeft every 1.5 seconds, which makes no DOM change.</p>
+    <div class="scroller" id="scroller" data-expect="warn" data-expect-notify="fail">
+      <span class="panel">Panel 1</span><span class="panel">Panel 2</span><span class="panel">Panel 3</span>
+    </div>
+  </div>
+
+  <p>Filler paragraph twenty-five.</p>
+  <p>Filler paragraph twenty-six.</p>
+  <p>Filler paragraph twenty-seven.</p>
+  <p>Filler paragraph twenty-eight.</p>
+
+  <div class="case">
+    <strong>(h) Carousel with controls and a slide status:</strong>
+    <p>The controls point at the slide track with aria-controls. A polite live region beside the track says which slide shows.</p>
+    <div class="carousel">
+      <button type="button" aria-controls="carousel-h">Previous slide</button>
+      <button type="button" id="carousel-h-pause" aria-controls="carousel-h">Pause</button>
+      <button type="button" aria-controls="carousel-h">Next slide</button>
+      <div class="track" id="carousel-h" data-expect="review" data-expect-notify="review">
+        <div class="slide active">Story 1: Library hours</div>
+        <div class="slide">Story 2: Book club</div>
+        <div class="slide">Story 3: Summer reading</div>
+      </div>
+      <p id="carousel-h-status" aria-live="polite">Slide 1 of 3</p>
+    </div>
+  </div>
+
+  <p>Filler paragraph twenty-nine.</p>
+  <p>Filler paragraph thirty.</p>
+  <p>Filler paragraph thirty-one.</p>
+  <p>Filler paragraph thirty-two.</p>
+
+  <div class="case">
+    <strong>(i) A live counter beside a silent one:</strong>
+    <p>Two counters in one box, on their own timers. Only the first is a live region. The live one must not hide the silent one.</p>
+    <div class="stats">
+      <p id="stat-visitors" aria-live="polite" data-expect="warn" data-expect-notify="review">Visitors: <span>12</span></p>
+      <p id="stat-price" data-expect="warn" data-expect-notify="fail">Price: <span>100</span></p>
+    </div>
+  </div>
+
+  <p>Filler paragraph thirty-three.</p>
+  <p>Filler paragraph thirty-four.</p>
+  <p>Filler paragraph thirty-five.</p>
+  <p>Filler paragraph thirty-six.</p>
+
+  <div class="case">
+    <strong>(j) Progress bar that a script animates (style writes only):</strong>
+    <p>A script sets the bar's width every frame. The checker cannot tell decoration from information, so the notice result is review.</p>
+    <div class="bar-track"><div class="bar" id="progress-bar" data-expect="warn" data-expect-notify="review"></div></div>
+  </div>
+
+  <p>Filler paragraph thirty-seven.</p>
+  <p>Filler paragraph thirty-eight.</p>
+  <p>Filler paragraph thirty-nine.</p>
+  <p>Filler paragraph forty.</p>
+
+  <div class="case">
+    <strong>(k) Ticker of headline links (defect):</strong>
+    <p>The link text contains "close", "stop" and "speed", and the second headline starts with "Stop". A headline is not a control.</p>
+    <p id="link-ticker" data-expect="warn" data-expect-notify="fail"><a href="#" class="rotating">Markets close higher</a> | <a href="#">Stop the presses</a></p>
+  </div>
+
+  <p>Filler paragraph forty-one.</p>
+  <p>Filler paragraph forty-two.</p>
+  <p>Filler paragraph forty-three.</p>
+  <p>Filler paragraph forty-four.</p>
+
+  <div class="case">
+    <strong>(l) Carousel with Previous and Next only (defect):</strong>
+    <p>The buttons point at the track with aria-controls, but nothing pauses the rotation.</p>
+    <div class="carousel">
+      <button type="button" aria-controls="carousel-l">Previous slide</button>
+      <button type="button" aria-controls="carousel-l">Next slide</button>
+      <div class="track" id="carousel-l" data-expect="warn" data-expect-notify="fail">
+        <div class="slide active">Event 1: Open house</div>
+        <div class="slide">Event 2: Book sale</div>
+        <div class="slide">Event 3: Story time</div>
+      </div>
+    </div>
+  </div>
+
+  <p>Filler paragraph forty-five.</p>
+  <p>Filler paragraph forty-six.</p>
+  <p>Filler paragraph forty-seven.</p>
+  <p>Filler paragraph forty-eight.</p>
+
+  <!-- (m) sits two levels under a page wrapper (as #root or #app does in an
+       app). A dialog opens one time inside the wrapper, on the carousel's
+       second rotation. It is not "next to" the carousel. -->
+  <div id="app-shell">
+    <div class="case">
+      <strong>(m) Carousel under a page wrapper, with an unrelated dialog (defect):</strong>
+      <p>A dialog opens in the same wrapper when the slide changes, one time. It says nothing about the slides.</p>
+      <div class="track" id="carousel-m" data-expect="warn" data-expect-notify="fail">
+        <div class="slide active">Offer 1: Free trial</div>
+        <div class="slide">Offer 2: Student price</div>
+        <div class="slide">Offer 3: Gift cards</div>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+  <p><a href="index.html">← Back to index</a></p>
+
+  <script>
+    function rotate(track, status) {
+      const slides = track.querySelectorAll('.slide');
+      let i = 0;
+      return () => {
+        slides[i].classList.remove('active');
+        i = (i + 1) % slides.length;
+        slides[i].classList.add('active');
+        if (status) status.textContent = `Slide ${i + 1} of ${slides.length}`;
+      };
+    }
+
+    // (a)
+    setInterval(rotate(document.getElementById('carousel-a')), 1500);
+
+    // (b) The Pause button works, as a real one would.
+    const headlines = ['Markets open higher', 'Rain expected tonight', 'Team wins final', 'Bridge reopens'];
+    let h = 0;
+    let tickerTimer = setInterval(() => {
+      h = (h + 1) % headlines.length;
+      document.getElementById('ticker').textContent = `Headline ${h + 1}: ${headlines[h]}`;
+    }, 1200);
+    document.getElementById('ticker-pause').addEventListener('click', (e) => {
+      clearInterval(tickerTimer);
+      e.currentTarget.disabled = true;
+    });
+
+    // (c)
+    let tip = 1;
+    document.getElementById('tip-btn').addEventListener('click', () => {
+      tip++;
+      document.getElementById('tip').textContent = `Tip ${tip}: Take a short break.`;
+    });
+
+    // (d)
+    setTimeout(() => {
+      const p = document.createElement('p');
+      p.textContent = 'Notice: the office closes early on Friday.';
+      document.getElementById('late-slot').appendChild(p);
+    }, 2500);
+
+    // (e) and (f)
+    for (const id of ['counter-live', 'counter-silent']) {
+      const span = document.querySelector(`#${id} span`);
+      let n = 40;
+      setInterval(() => {
+        n++;
+        span.textContent = String(n);
+      }, 1000);
+    }
+
+    // (g)
+    const scroller = document.getElementById('scroller');
+    setInterval(() => {
+      const next = scroller.scrollLeft + 300;
+      scroller.scrollLeft = next >= scroller.scrollWidth ? 0 : next;
+    }, 1500);
+
+    // (h) Pause stops the rotation.
+    const hTimer = setInterval(rotate(document.getElementById('carousel-h'), document.getElementById('carousel-h-status')), 1500);
+    document.getElementById('carousel-h-pause').addEventListener('click', () => clearInterval(hTimer));
+
+    // (i) Different periods: the live counter changes about twice as often.
+    for (const [id, ms] of [['stat-visitors', 800], ['stat-price', 1700]]) {
+      const span = document.querySelector(`#${id} span`);
+      setInterval(() => {
+        span.textContent = String(Number(span.textContent) + 1);
+      }, ms);
+    }
+
+    // (j)
+    const bar = document.getElementById('progress-bar');
+    (function frame(t) {
+      bar.style.width = `${(t % 3000) / 30}%`;
+      requestAnimationFrame(frame);
+    })(0);
+
+    // (k)
+    const linkHeads = ['Markets close higher', 'Bus stop moved', 'High-speed rail opens'];
+    let lh = 0;
+    setInterval(() => {
+      lh = (lh + 1) % linkHeads.length;
+      document.querySelector('#link-ticker a.rotating').textContent = linkHeads[lh];
+    }, 1200);
+
+    // (l)
+    setInterval(rotate(document.getElementById('carousel-l')), 1500);
+
+    // (m) The dialog opens in the same task as the second rotation.
+    const mRotate = rotate(document.getElementById('carousel-m'));
+    let mTicks = 0;
+    setInterval(() => {
+      mRotate();
+      if (++mTicks !== 2) return;
+      const d = document.createElement('div');
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-label', 'Newsletter');
+      d.className = 'notice';
+      d.textContent = 'Sign up for our newsletter.';
+      document.getElementById('app-shell').appendChild(d);
+    }, 1500);
+
+    // A notice dialog opens ONE time, far from every case, 3 seconds after
+    // load; then its class changes every 1.5 seconds while it stays open.
+    // Neither is a notice for any case above (their data-expect-notify
+    // results must not change).
+    setTimeout(() => {
+      const d = document.createElement('div');
+      d.setAttribute('role', 'dialog');
+      d.setAttribute('aria-label', 'Site notice');
+      d.className = 'notice';
+      d.textContent = 'This site uses cookies.';
+      document.body.appendChild(d);
+      setInterval(() => d.classList.toggle('flash'), 1500);
+    }, 3000);
+  </script>
+</body>
+</html>

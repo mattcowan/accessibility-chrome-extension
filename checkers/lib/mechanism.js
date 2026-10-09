@@ -1,7 +1,8 @@
 // Finds a user mechanism (pause / stop / hide / volume control) for
 // auto-playing content and checks it against the Trusted Tester location
 // rules. Injected (classic script) after selector.js, findings.js and
-// accname.js; used by the motion (TT 2.B) and audio (TT 2.A) checkers.
+// accname.js; used by the motion (TT 2.B), audio (TT 2.A) and auto-update
+// (TT 2.C) checkers.
 //
 // TT 2.A: the mechanism must be within the first three elements encountered.
 // TT 2.B / 2.C: within the first three elements OR within three elements
@@ -29,7 +30,30 @@ if (!globalThis.__a11yMechanism) {
         verbs: /\b(pause|stop|play|hide|freeze)\b/i,
         nearby: true,
       },
+      // Auto-updating content: pause, stop, or hide it, or set how often it
+      // updates. Stricter than 2.A/2.B, because the content itself is often
+      // full of links: the name must START with the verb and be at most four
+      // words ("Pause slideshow", "Change speed"), so a headline link such as
+      // "Markets close higher" or "Bus stop moved" is not a control. No
+      // close/dismiss: those hide a cookie bar or a dialog far more often than
+      // updating content. A control that only points at the content with
+      // aria-controls is no candidate either (a carousel's "Next slide" does
+      // not pause it).
+      // A short headline can still start with a verb ("Stop the presses"), so
+      // links INSIDE the updating content are never candidates either.
+      '2.C': {
+        verbs: /^\W*((set|change|toggle|adjust)\s+)?(pause|stop|start\/stop|play|hide|freeze|speed|frequency|interval|auto[-\s]?(play|refresh|update|rotate|rotation|scroll|advance))\b/i,
+        maxWords: 4,
+        requireName: true,
+        skipLinksInside: true,
+        nearby: true,
+      },
     };
+
+    function nameMatches(rule, name) {
+      if (rule.maxWords && name.trim().split(/\s+/).length > rule.maxWords) return false;
+      return rule.verbs.test(name);
+    }
 
     const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'META', 'LINK']);
     const MEDIA_TAGS = new Set(['VIDEO', 'AUDIO', 'IFRAME', 'CANVAS']);
@@ -143,23 +167,30 @@ if (!globalThis.__a11yMechanism) {
     }
 
     // Best candidate mechanism for `target` under TT test `test` ('2.A' |
-    // '2.B'), or null. `where` is 'first3' | 'near' | 'elsewhere'.
+    // '2.B' | '2.C'), or null. `where` is 'first3' | 'near' | 'elsewhere'.
     function find(target, test) {
       const rule = TESTS[test];
       if (!rule) throw new Error(`Unknown Trusted Tester test: ${test}`);
       const { order, tabStops, interactive, names } = pageSnapshot();
       const candidates = [];
-      if (target.controls) candidates.push({ el: target, name: 'native media controls' });
+      if (target.controls) candidates.push({ el: target, name: 'native media controls', named: true });
       for (const el of interactive) {
         if (el === target) continue;
+        if (rule.skipLinksInside && el.matches('a[href]') && target.contains(el)) continue;
         if (!names.has(el)) names.set(el, nameOf(el));
         const name = names.get(el);
-        if (rule.verbs.test(name) || controlsTarget(el, target)) candidates.push({ el, name });
+        const named = nameMatches(rule, name);
+        if (named || (!rule.requireName && controlsTarget(el, target))) candidates.push({ el, name, named });
       }
       if (!candidates.length) return null;
 
+      // Best = best location, then a control whose name says what it does
+      // over one that only points at the target with aria-controls (2.A/2.B:
+      // a "Pause video" button over an unnamed icon button), then the nearest.
       const [lo, hi] = rangeOf(target, order);
       const rank = { first3: 0, near: 1, elsewhere: 2 };
+      const better = (a, b) =>
+        rank[a.where] - rank[b.where] || Number(b.named) - Number(a.named) || a.distance - b.distance;
       let best = null;
       for (const c of candidates) {
         const index = order.indexOf(c.el);
@@ -168,13 +199,7 @@ if (!globalThis.__a11yMechanism) {
         else if (rule.nearby && index !== -1 && index >= lo - 3 && index <= hi + 3) where = 'near';
         const distance = index === -1 ? Infinity : Math.min(Math.abs(index - lo), Math.abs(index - hi));
         const m = { ...c, index, where, distance, tabStop: tabStops.indexOf(c.el) + 1 };
-        if (
-          !best ||
-          rank[m.where] < rank[best.where] ||
-          (rank[m.where] === rank[best.where] && m.distance < best.distance)
-        ) {
-          best = m;
-        }
+        if (!best || better(m, best) < 0) best = m;
       }
       return best;
     }

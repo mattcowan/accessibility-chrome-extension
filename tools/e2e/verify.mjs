@@ -11,7 +11,9 @@
 // Coverage today: motion 2.2.2 / TT 2.B mechanisms, the audio checker
 // (1.4.2 / TT 2.A) under allowed and blocked autoplay, Reload and record
 // (popup and side-panel contexts), the batch runner, the recorder
-// handshake, the keyboard access scan (2.1.1 / TT 4.A), the focus locator
+// handshake, no user activation from checker runs (#15), the auto-update
+// checker (2.2.2 / TT 2.C, 4.1.2 / TT 2.D), the keyboard access scan
+// (2.1.1 / TT 4.A), the focus locator
 // (real Tab / Shift+Tab presses), and the Trusted Tester section 5 tools: form
 // labels (5.C), error capture (5.F / 5.G) and the input watcher (5.D / 5.E),
 // where the test plays the tester with real clicks, keys and selects. Older checkers (text spacing, target size, focus, hover, reflow,
@@ -24,8 +26,10 @@
 //   into file:// pages).
 // - Autoplay behavior is set per browser launch with --autoplay-policy.
 // - Page state is probed from the service worker when user activation
-//   matters: Playwright's page.evaluate and popup-driven injections both
-//   carry a user gesture into the page.
+//   matters: Playwright's page.evaluate carries a user gesture into the page,
+//   and so does a chrome.scripting call made from the popup tab right after
+//   a click on it (this script's expectations() helper does that; the
+//   extension itself injects only through the SW).
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -262,6 +266,59 @@ try {
 
   // ======================= autoplay BLOCKED =======================
   env = await launch('document-user-activation-required');
+  // #15: no checker path gives the page user activation. Each step is a real
+  // click on the popup (so the popup has transient activation when it sends
+  // the exec message); the page is probed from the SW, which has no gesture.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    const [sw] = env.ctx.serviceWorkers();
+    const probe = () =>
+      sw.evaluate(async (tabId) => {
+        const [r] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: async () => ({
+            active: navigator.userActivation.hasBeenActive,
+            // A blocked play() rejects with NotAllowedError.
+            play: await document.getElementById('scripted').play().then(() => 'played', (e) => e.name),
+          }),
+        });
+        return r.result;
+      }, tabId);
+    const fresh = await probe();
+    check('[#15] fresh page has no user activation and play() is blocked', !fresh.active && fresh.play === 'NotAllowedError', JSON.stringify(fresh));
+    const steps = [
+      ['Run', () => clickAndWait(env, 'run-audio', /^audio: \d+ findings/)],
+      ['Run selected', async () => {
+        await env.popup.evaluate(() => {
+          for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'audio' || b.dataset.batchId === 'motion';
+        });
+        await clickAndWait(env, 'run-selected', /^Batch complete/);
+      }],
+      ['click-to-reveal', async () => {
+        await env.popup.click('details.tool-group[data-tool="audio"] > summary');
+        await env.popup.click('details.tool-group[data-tool="audio"] .finding-reveal');
+        await sleep(800);
+      }],
+      ['Highlight all', () => clickAndWait(env, 'findings-groups .highlight-all[data-tool="audio"]', /^audio: highlighted/)],
+      ['a stateful toggle (Start inspector)', () => clickAndWait(env, 'toggle-accname', /^accname: /)],
+    ];
+    for (const [label, act] of steps) {
+      await act();
+      const got = await probe();
+      check(`[#15] after ${label}: no user activation, play() still blocked`, !got.active && got.play === 'NotAllowedError', JSON.stringify(got));
+    }
+    // Control: a real click on the page does give activation, so the probe
+    // can see it. Nothing may touch the page with page.evaluate before this
+    // (evaluate itself gives activation and would make the control pass).
+    await page.bringToFront();
+    await page.mouse.click(5, 5);
+    const clicked = await probe();
+    check('[#15] control: a real page click gives activation (the probe works)', clicked.active === true, JSON.stringify(clicked));
+    const overlay = await page.evaluate(() => document.querySelectorAll('#__a11y-overlay > *').length);
+    check('[#15] reveal and Highlight all drew on the page through the SW route', overlay > 0, `overlay children: ${overlay}`);
+    await page.close();
+  }
   for (const file of ['audio-autoplay.html', 'audio-pause-first.html', 'audio-script.html']) {
     await assertPage(env, '[audio blocked]', file, { tool: 'audio', buttonId: 'run-audio', attr: 'data-expect-blocked', wcag: '1.4.2' });
   }
@@ -363,6 +420,208 @@ try {
       const got = severityFor(f, e.sel, '1.4.2');
       check(`[panel recorded] audio-autoplay.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}`);
     }
+    await page.close();
+  }
+  await env.ctx.close();
+
+  // ============ #11 / #14: auto-update (2.2.2 / TT 2.C, 4.1.2 / TT 2.D) ============
+  env = await launch('no-user-gesture-required');
+  {
+    // Watch-time field: whole seconds; empty, zero, negative and non-numeric
+    // use the default (10). A number input reads 'abc' as ''.
+    const parsed = await env.popup.evaluate(async () => {
+      const field = document.getElementById('auto-update-seconds');
+      const out = {};
+      for (const v of ['', '0', '-3', 'abc', '2.7', '6']) {
+        field.value = v;
+        field.dispatchEvent(new Event('change'));
+        await new Promise((r) => setTimeout(r, 100));
+        out[v] = field.value;
+      }
+      return out;
+    });
+    const want = { '': '10', 0: '10', '-3': '10', abc: '10', 2.7: '2', 6: '6' };
+    check('[auto-update] watch time: empty, 0, -3 and non-numeric use 10; 2.7 → 2; 6 stays', Object.entries(want).every(([k, v]) => parsed[k] === v), JSON.stringify(parsed));
+
+    // openFixture reloads the popup, which must keep the 6.
+    const { page, tabId } = await openFixture(env, 'auto-update.html', 500);
+    const kept = await env.popup.evaluate(() => document.getElementById('auto-update-seconds').value);
+    check('[auto-update] watch time is kept across popup reloads', kept === '6', kept);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(1500);
+    const during = await env.popup.evaluate(() => ({
+      progress: document.getElementById('auto-update-progress').textContent,
+      disabled: document.getElementById('run-auto-update').disabled,
+      status: document.getElementById('status').textContent,
+    }));
+    check('[auto-update] the popup shows that it is watching', /Watching… \d s/.test(during.progress) && during.disabled && /watching the page for 6 seconds/.test(during.status), JSON.stringify(during));
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings \(watched 6 seconds\)/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const f = await storedFindings(env, tabId, 'auto-update');
+    const show = JSON.stringify(f.map((x) => [x.wcag, x.severity, x.selector, x.details.slice(0, 100)]));
+    for (const e of await expectations(env, tabId)) {
+      const got = severityFor(f, e.sel, '2.2.2');
+      check(`[auto-update] auto-update.html ${e.sel} 2.2.2 → ${e.expect}`, got === e.expect, `got ${got}; findings: ${show}`);
+    }
+    for (const e of await expectations(env, tabId, 'data-expect-notify')) {
+      const got = severityFor(f, e.sel, '4.1.2');
+      check(`[auto-update] auto-update.html ${e.sel} 4.1.2 (TT 2.D) → ${e.expect}`, got === e.expect, `got ${got}; findings: ${show}`);
+    }
+    const det = (sel, wcag) => (f.find((x) => x.selector === sel && x.wcag === wcag) || {}).details || '';
+    check('[auto-update] (b) names the Pause button and counts the updates', /Candidate control "Pause"/.test(det('#ticker', '2.2.2')) && /updated on its own [3-6] times in 6 seconds, about every 1\.\d seconds/.test(det('#ticker', '2.2.2')), det('#ticker', '2.2.2'));
+    // Any control named Pause is a candidate (the checker cannot tell what a
+    // button controls), so (a) sees the ticker's, out of place.
+    check('[auto-update] (a) the ticker\'s Pause is a candidate outside the TT 2.C location', /not where Trusted Tester 2\.C expects it/.test(det('#carousel-a', '2.2.2')) && /#ticker-pause/.test(det('#carousel-a', '2.2.2')), det('#carousel-a', '2.2.2'));
+    check('[auto-update] (e) names its own live region', /in a live region \(#counter-live, polite\)/.test(det('#counter-live', '4.1.2')), det('#counter-live', '4.1.2'));
+    check('[auto-update] (h) names the slide status beside the track', /live region in or next to this content \(#carousel-h-status, polite\)/.test(det('#carousel-h', '4.1.2')), det('#carousel-h', '4.1.2'));
+    check('[auto-update] (h) its Pause button is the control', /Candidate control "Pause" at #carousel-h-pause/.test(det('#carousel-h', '2.2.2')), det('#carousel-h', '2.2.2'));
+    check('[auto-update] (i) the live neighbor does not hide the silent counter', /not told about the updates/.test(det('#stat-price', '4.1.2')), det('#stat-price', '4.1.2'));
+    check('[auto-update] (j) style writes only: says it cannot tell decoration from information', /Only inline styles changed/.test(det('#progress-bar', '4.1.2')), det('#progress-bar', '4.1.2'));
+    check('[auto-update] (k) a headline link is not the control, even one that starts with "Stop"', !/Candidate control "(Markets|Bus|High|Stop the)/.test(det('#link-ticker', '2.2.2')), det('#link-ticker', '2.2.2'));
+    check('[auto-update] (m) a dialog in the page wrapper is not "next to" the carousel', /not told about the updates/.test(det('#carousel-m', '4.1.2')), det('#carousel-m', '4.1.2'));
+    check('[auto-update] (l) Previous/Next with aria-controls are not a pause control', !/Candidate control "(Previous|Next)/.test(det('#carousel-l', '2.2.2')), det('#carousel-l', '2.2.2'));
+    check('[auto-update] a dialog that opened once elsewhere is no notice for any case', !f.some((x) => x.wcag === '4.1.2' && /A dialog \(/.test(x.details) && x.selector !== '[role="dialog"]' && !/dialog/.test(x.selector)), show);
+    check('[auto-update] (g) the scroll carousel is found with no DOM change', /updated on its own/.test(det('#scroller', '2.2.2')), det('#scroller', '2.2.2'));
+    check('[auto-update] no page note when reduced motion is off and nobody touched the page', !f.some((x) => x.selector === '(page)'), show);
+    check('[auto-update] every finding is 2.2.2 or 4.1.2', f.length > 0 && f.every((x) => x.wcag === '2.2.2' || x.wcag === '4.1.2'), show);
+    const tickerPaused = await page.evaluate(() => document.getElementById('ticker-pause').disabled);
+    check('[auto-update] the checker clicked nothing', !tickerPaused);
+
+    // With both Pause buttons gone (removed gesture-free from the SW), (a)
+    // has no candidate at all.
+    const [sw] = env.ctx.serviceWorkers();
+    await sw.evaluate(async (tabId) => {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        // Also (k)'s "Stop the presses" link: skipped inside its own ticker,
+        // but anywhere else on the page a matching name is a candidate.
+        func: () => {
+          ['ticker-pause', 'carousel-h-pause'].forEach((id) => document.getElementById(id).remove());
+          document.querySelector('#link-ticker a:not(.rotating)').remove();
+        },
+      });
+    }, tabId);
+    await env.popup.evaluate(() => {
+      const field = document.getElementById('auto-update-seconds');
+      field.value = '3';
+      field.dispatchEvent(new Event('change'));
+    });
+    await clickAndWait(env, 'run-auto-update', /^auto-update: \d+ findings/, 20000);
+    const f2 = await storedFindings(env, tabId, 'auto-update');
+    const a2 = (f2.find((x) => x.selector === '#carousel-a' && x.wcag === '2.2.2') || {}).details || '';
+    check('[auto-update] (a) with no Pause anywhere: no control found, asks about the essential exception', /No control to pause, stop, or hide it/.test(a2) && /essential exception/.test(a2), a2);
+    await page.close();
+  }
+  // A page with no changes: no findings, and the status says how long it watched.
+  {
+    const { page, tabId } = await openFixture(env, 'tiny-targets.html', 500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await clickAndWait(env, 'run-auto-update', /^auto-update: \d+ findings/, 20000);
+    const status = await env.popup.evaluate(() => document.getElementById('status').textContent);
+    const f = await storedFindings(env, tabId, 'auto-update');
+    check('[auto-update] static page: no findings, status says it watched 3 seconds', f.length === 0 && status === 'auto-update: 0 findings (watched 3 seconds)', `${status} ${JSON.stringify(f)}`);
+
+    // Reduced motion on, and a key press during the watch: one page note
+    // names both.
+    await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: 'reduce', tabId }), tabId);
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(1000);
+    await page.keyboard.press('Shift');
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const g = await storedFindings(env, tabId, 'auto-update');
+    const note = (g.find((x) => x.selector === '(page)') || {}).details || '';
+    check('[auto-update] page note: reduced motion was on, and user input was seen', g.length === 1 && /Reduced-motion emulation was on/.test(note) && /User input .* happened 1 time/.test(note), JSON.stringify(g));
+    await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: null, tabId }), tabId);
+
+    // A reload during the watch must not be reported as a clean page.
+    await env.popup.evaluate(() => (document.getElementById('banner').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(1000);
+    await page.reload();
+    await env.popup.waitForFunction(() => !document.getElementById('run-auto-update').disabled, null, { timeout: 20000 });
+    const reloaded = await env.popup.evaluate(() => document.getElementById('banner').textContent);
+    check('[auto-update] a reload during the watch says nothing was reported', /navigated or reloaded during the auto-update watch/.test(reloaded), reloaded);
+
+    // A hidden tab during the watch gets a page note (timers slow down).
+    // Playwright keeps every page visible, even behind another tab, so the
+    // test hides it for 2 s in the checker's own (isolated) world: an
+    // own-property document.hidden plus a visibilitychange event.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(300);
+    const [swHide] = env.ctx.serviceWorkers();
+    const setHidden = (hidden) =>
+      swHide.evaluate(async ({ tabId, hidden }) => {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: (h) => {
+            if (h) Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+            else delete document.hidden;
+            document.dispatchEvent(new Event('visibilitychange'));
+          },
+          args: [hidden],
+        });
+      }, { tabId, hidden });
+    await setHidden(true);
+    await sleep(2000);
+    await setHidden(false);
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const hiddenNote = ((await storedFindings(env, tabId, 'auto-update')).find((x) => x.selector === '(page)') || {}).details || '';
+    check('[auto-update] a tab hidden during the watch gets a page note', /The tab was hidden for [12] of the 3 seconds/.test(hiddenNote), hiddenNote);
+
+    // exec calls only a page object's own function properties.
+    const bad = await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'exec', tabId, global: '__a11yCheckers', method: 'constructor', args: [] }), tabId);
+    check('[exec] an inherited name (constructor) is refused with a clear error', bad && !bad.ok && /not a page method/.test(bad.error), JSON.stringify(bad));
+    // A checker that throws is reported, not read as a clean "0 findings"
+    // (executeScript itself returns null for a thrown error).
+    const thrown = await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'exec', tabId, global: '__a11yCheckers', method: 'autoUpdate', args: [{ action: 'bogus' }] }), tabId);
+    check('[exec] a checker that throws fails the call with its message', thrown && !thrown.ok && /Unknown autoUpdate action/.test(thrown.error), JSON.stringify(thrown));
+    await page.close();
+  }
+  // The action popup closes when the tester clicks the page, which kills its
+  // countdown. The page keeps watching; the next popup picks the watch up.
+  {
+    const { page, tabId } = await openFixture(env, 'auto-update.html', 500);
+    const popupUrl = env.popup.url();
+    const marker = () => page.evaluate(() => document.documentElement.dataset.a11yAutoUpdate || null);
+    // (1) Reopened while the watch still runs: resumes the countdown.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.click('#run-auto-update');
+    await sleep(800);
+    check('[auto-update] the page marks a running watch', (await marker()) === 'watching', String(await marker()));
+    await env.popup.goto('about:blank'); // the popup closes
+    await env.popup.goto(popupUrl);
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const resumed = await storedFindings(env, tabId, 'auto-update');
+    check('[auto-update] a reopened popup resumes the running watch and collects it', severityFor(resumed, '#carousel-a', '2.2.2') === 'warn', JSON.stringify(resumed.map((x) => [x.wcag, x.severity, x.selector])));
+    check('[auto-update] collect removes the page marker', (await marker()) === null, String(await marker()));
+    // (2) Reopened after the watch ended: collects at once.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.click('#run-auto-update');
+    await sleep(500);
+    await env.popup.goto('about:blank');
+    await sleep(3500);
+    check('[auto-update] the page marks a finished, uncollected watch', (await marker()) === 'done', String(await marker()));
+    await env.popup.goto(popupUrl);
+    await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 10000 });
+    const late = await storedFindings(env, tabId, 'auto-update');
+    check('[auto-update] a popup opened after the watch ended collects it', severityFor(late, '#carousel-a', '2.2.2') === 'warn', JSON.stringify(late.map((x) => [x.wcag, x.severity, x.selector])));
+    await page.close();
+  }
+  // Batch runs it (first in the registry).
+  {
+    const { page, tabId } = await openFixture(env, 'auto-update.html', 500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => {
+      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'auto-update' || b.dataset.batchId === 'motion';
+    });
+    await clickAndWait(env, 'run-selected', /^Batch complete/, 30000);
+    const bf = await storedFindings(env, tabId, 'auto-update');
+    check('[batch] Run selected runs the auto-update checker', severityFor(bf, '#carousel-a', '2.2.2') === 'warn', JSON.stringify(bf.map((x) => [x.wcag, x.severity, x.selector])));
     await page.close();
   }
   await env.ctx.close();

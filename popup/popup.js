@@ -1,13 +1,18 @@
 // Popup: emulation controls (via the service worker / CDP), checker runner
-// (direct chrome.scripting injection under activeTab), findings store with
-// run-over-run diff, and CSV export. The same page also serves as the Chrome
-// side panel (?context=panel), where it additionally tracks the active tab.
+// (injection under activeTab, made by the SW's `exec` route — never from this
+// page, see inject()), findings store with run-over-run diff, and CSV export.
+// The same page also serves as the Chrome side panel (?context=panel), where
+// it additionally tracks the active tab.
 
 import { downloadCsv, downloadTable } from './csv.js';
 
 const LIBS = ['checkers/lib/selector.js', 'checkers/lib/findings.js'];
 const OVERLAY = 'checkers/lib/overlay.js';
-// Mechanism finder for auto-playing content (TT 2.A / 2.B); needs accname.
+// The popup's own page-side helpers (reveal, highlight, markers).
+const OPS = 'checkers/lib/ops.js';
+const REVEAL_FILES = ['checkers/lib/resolve.js', OVERLAY, OPS];
+// Mechanism finder for auto-playing and auto-updating content (TT 2.A, 2.B,
+// 2.C); needs accname.
 const MECHANISM = ['checkers/lib/accname.js', 'checkers/lib/mechanism.js'];
 // Focus-indicator style diff shared by the Focus visibility walker and the
 // focus locator.
@@ -16,11 +21,8 @@ const LOCATOR_FILES = [...LIBS, 'checkers/lib/accname.js', FOCUS_STYLE, 'checker
 // After Reload and record, wait this long for page scripts to start audio
 // (and for Chrome's tab "audible" flag, which lags a moment) before checking.
 const RECORD_SETTLE_MS = 4000;
-// The Record click gives this page transient user activation (5 s in Chrome),
-// and any executeScript made while it lasts carries the gesture into the
-// page. Inject nothing into the reloaded page until it has expired.
-const ACTIVATION_EXPIRY_MS = 6000;
 let recordingAudio = false; // Reload and record in progress (side panel guards)
+let autoUpdateRunning = false; // an Auto-update watch is counting down (side panel guard)
 let tabSwitchedWhileRecording = false; // side panel: re-sync once recording ends
 // Live-region detection, shared by the monitor, Error capture and the Input
 // watcher.
@@ -32,6 +34,10 @@ const FORMS = ['checkers/lib/accname.js', 'checkers/lib/forms.js'];
 const ERROR_FILES = [...LIBS, ...FORMS, FOCUS_STYLE, LIVE, 'checkers/error-capture.js'];
 const WATCH_FILES = [...LIBS, ...FORMS, LIVE, 'checkers/input-watcher.js'];
 const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
+// Auto-update (TT 2.C / 2.D) watch time, in whole seconds. Kept in
+// chrome.storage.local under 'autoUpdateSeconds'.
+const AUTO_UPDATE_DEFAULT_S = 10;
+const AUTO_UPDATE_MAX_S = 300;
 
 const $ = (id) => document.getElementById(id);
 const fingerprint = (f) => `${f.tool}|${f.wcag}|${f.selector}`;
@@ -80,28 +86,39 @@ function send(msg) {
   return chrome.runtime.sendMessage({ ...msg, tabId: tab.id });
 }
 
-async function inject(files, allFrames = false) {
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames },
-    files,
-  });
+// Every injection goes through the SW (#15). A chrome.scripting call from
+// this page carries the click's user gesture into the page, which gives the
+// page user activation (it can then start audio the autoplay policy blocked,
+// open pop-ups, and so on). The SW's `exec` route injects without it. Do not
+// call chrome.scripting from this file.
+async function exec(msg) {
+  const res = await send({ type: 'exec', ...msg });
+  if (!res || !res.ok) throw new Error((res && res.error) || 'The service worker did not run the script.');
+  return res.results;
 }
 
-async function callChecker(name, arg = null, allFrames = false) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, allFrames },
-    func: (n, a) => globalThis.__a11yCheckers[n](a),
-    args: [name, arg],
-  });
-  return results;
+async function inject(files, allFrames = false) {
+  await exec({ files, allFrames });
+}
+
+// globalThis[global][method](...args) in the page -> [{frameId, result}].
+function pageCall(global, method, args = [], allFrames = false) {
+  return exec({ global, method, args, allFrames });
+}
+
+function callChecker(name, arg = null, allFrames = false) {
+  return pageCall('__a11yCheckers', name, [arg], allFrames);
 }
 
 async function hoverCall(method, index) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: (m, i) => globalThis.__a11yHover[m](i),
-    args: [method, index],
-  });
+  const [res] = await pageCall('__a11yHover', method, [index]);
+  return res.result;
+}
+
+// The stateful tools' page markers (which ones are running).
+async function pageMarkers() {
+  await inject([OPS]);
+  const [res] = await pageCall('__a11yOps', 'markers');
   return res.result;
 }
 
@@ -273,6 +290,7 @@ async function storeToolFindings(tool, rawFindings, { final = true } = {}) {
 const BADGE_BY_TOOL = {
   motion: 'badge-motion',
   audio: 'badge-audio',
+  'auto-update': 'badge-auto-update',
   'text-spacing': 'badge-text-spacing',
   'focus-visibility': 'badge-focus',
   'keyboard-access': 'badge-keyboard-access',
@@ -447,23 +465,12 @@ function renderReport(store) {
 async function revealFinding({ selector, severity }) {
   banner('');
   try {
-    await inject(['checkers/lib/resolve.js', OVERLAY], true);
+    await inject(REVEAL_FILES, true);
     // All frames: findings are collected allFrames, so the selector may live in
     // an iframe — the highlight lands wherever it matches (a generic selector
     // can match in more than one frame; scrolling inside an iframe scrolls
     // that iframe's viewport, not the top page).
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: (sel, sev) => {
-        const el = globalThis.__a11yResolve(sel);
-        if (!el) return false;
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        globalThis.__a11yOverlay.outline(el, sev);
-        globalThis.__a11yOverlay.badge(el, sev.charAt(0).toUpperCase(), sev);
-        return true;
-      },
-      args: [selector, severity],
-    });
+    const results = await pageCall('__a11yOps', 'reveal', [selector, severity], true);
     if (!results.some((r) => r.result === true)) {
       banner('Element not found on the page — it may have been removed or re-rendered. Re-run the checker to refresh findings.');
     }
@@ -480,22 +487,8 @@ async function highlightAllForTool(tool) {
       .filter((f) => isRevealable(f.selector))
       .map((f) => ({ selector: f.selector, severity: f.severity }));
     if (!items.length) return;
-    await inject(['checkers/lib/resolve.js', OVERLAY], true);
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: (list) => {
-        let hit = 0;
-        for (const item of list) {
-          const el = globalThis.__a11yResolve(item.selector);
-          if (!el) continue;
-          globalThis.__a11yOverlay.outline(el, item.severity);
-          globalThis.__a11yOverlay.badge(el, item.severity.charAt(0).toUpperCase(), item.severity);
-          hit++;
-        }
-        return hit;
-      },
-      args: [items],
-    });
+    await inject(REVEAL_FILES, true);
+    const results = await pageCall('__a11yOps', 'highlight', [items], true);
     const hit = results.reduce((n, r) => n + (r.result || 0), 0);
     announce(`${tool}: highlighted ${Math.min(hit, items.length)} of ${items.length}`);
   } catch (e) {
@@ -604,15 +597,21 @@ async function syncWatchFindings(state, { final = false } = {}) {
 // ------------------------------------------------------------ checker wiring
 
 // Declarative checker registry: drives both the per-row Run buttons and the
-// batch "Run selected" loop. Registry order IS the batch order — text-spacing
-// runs after target-size/reflow (its analyze pass applies the override
-// stylesheet, which would skew their measurements) and the slow hover probe
-// runs last. The stateful toggles (text-spacing apply/remove, accname
+// batch "Run selected" loop. Registry order IS the batch order — auto-update
+// watches first, before any checker focuses, styles or hovers the page (those
+// can change content, or stop a carousel that pauses on focus or hover);
+// text-spacing runs after target-size/reflow (its analyze pass applies the
+// override stylesheet, which would skew their measurements) and the slow
+// hover probe runs last. The stateful toggles (text-spacing apply/remove, accname
 // inspector, live-regions monitor, focus locator, error capture, input
 // watcher) are deliberately not batchable and stay outside the registry, as
 // does audio's Reload and record (it reloads the page, which would reset
 // what the other checkers measure).
 const CHECKERS = [
+  // Off by default in the batch: it adds the whole watch time to the run.
+  { id: 'auto-update', tool: 'auto-update', buttonId: 'run-auto-update', kind: 'auto-update',
+    files: [...MECHANISM, LIVE, 'checkers/auto-update.js'],
+    batchDefault: false },
   { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
     files: [...MECHANISM, 'checkers/motion-check.js'], fnName: 'motion', allFrames: true,
     batchDefault: true },
@@ -789,10 +788,94 @@ async function execKeyboardAccess(entry) {
   return { tool: 'keyboard-access', count: stored.findings.length };
 }
 
+// Whole seconds from the watch-time field. Empty, zero, negative or
+// non-numeric uses the default; a fraction rounds down; capped at the max.
+function parseWatchSeconds(raw) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return AUTO_UPDATE_DEFAULT_S;
+  return Math.min(n, AUTO_UPDATE_MAX_S);
+}
+
+async function initAutoUpdateSeconds() {
+  const field = $('auto-update-seconds');
+  const stored = (await chrome.storage.local.get('autoUpdateSeconds')).autoUpdateSeconds;
+  field.value = String(parseWatchSeconds(stored));
+  field.addEventListener('change', async () => {
+    const seconds = parseWatchSeconds(field.value);
+    field.value = String(seconds);
+    await chrome.storage.local.set({ autoUpdateSeconds: seconds });
+  });
+}
+
+// Auto-update (2.2.2 / TT 2.C, 4.1.2 / TT 2.D): the page watches itself for
+// the set time; this page waits it out with a visible countdown, then
+// collects. Top frame only. Like Reload and record, it holds the tab: if the
+// side panel switches tabs meanwhile, the countdown stops at once and the run
+// is abandoned (the page-side watch ends on its own). autoUpdateRunning keeps
+// the Run button disabled through the panel's restricted-UI reset, so a
+// second run cannot share the countdown. entry.resume: pick up a watch that
+// an earlier popup started (see resumeAutoUpdate) instead of starting one.
+async function execAutoUpdate(entry) {
+  autoUpdateRunning = true;
+  $('run-auto-update').disabled = true;
+  try {
+    return await watchAndCollect(entry);
+  } finally {
+    autoUpdateRunning = false;
+    $('run-auto-update').disabled = restricted;
+  }
+}
+
+async function watchAndCollect(entry) {
+  const watchedTabId = tab.id;
+  await inject([...LIBS, ...entry.files]);
+  let endAt;
+  if (entry.resume) {
+    const [st] = await callChecker('autoUpdate', { action: 'status' });
+    const status = st.result || {};
+    if (!status.active && !status.finished) return { tool: 'auto-update', count: 0, note: 'no earlier watch to collect' };
+    endAt = Date.now() + (status.remainingMs || 0);
+    announce(
+      status.active
+        ? `auto-update: a watch started earlier is still running. Results in ${Math.ceil(status.remainingMs / 1000)} seconds. Do not touch the page.`
+        : 'auto-update: collecting a watch that ended while no popup was open.'
+    );
+  } else {
+    const seconds = parseWatchSeconds($('auto-update-seconds').value);
+    const [start] = await callChecker('autoUpdate', { action: 'start', seconds });
+    if (start.result && start.result.busy) {
+      throw new Error('Auto-update is already watching this page (from the popup or the side panel). Wait for it to finish.');
+    }
+    announce(`auto-update: watching the page for ${seconds} seconds. Do not touch the page.`);
+    endAt = Date.now() + seconds * 1000;
+  }
+  const progress = $('auto-update-progress');
+  try {
+    for (let left = endAt - Date.now(); left > 0 && tab.id === watchedTabId; left = endAt - Date.now()) {
+      progress.textContent = `Watching… ${Math.ceil(left / 1000)} s`;
+      await sleep(Math.min(250, left));
+    }
+  } finally {
+    progress.textContent = '';
+  }
+  if (tab.id !== watchedTabId) throw new Error('The tab changed during the auto-update watch. Run it again.');
+  // Inject again: if the page navigated, the new document has no checker,
+  // and collect must answer "missing" rather than fail on an undefined.
+  await inject([...LIBS, ...entry.files]);
+  const [res] = await callChecker('autoUpdate', { action: 'collect' });
+  if (!res.result || res.result.missing) {
+    throw new Error('The page navigated or reloaded during the auto-update watch, so nothing was reported. Run it again.');
+  }
+  const { findings, watchedMs } = res.result;
+  const stored = await storeToolFindings('auto-update', findings);
+  return { tool: 'auto-update', count: stored.findings.length, note: `watched ${Math.round(watchedMs / 1000)} seconds` };
+}
+
 function execEntry(entry) {
   if (entry.kind === 'hover') return execHover(entry);
   if (entry.kind === 'audio') return execAudio(entry);
   if (entry.kind === 'keyboard') return execKeyboardAccess(entry);
+  if (entry.kind === 'auto-update') return execAutoUpdate(entry);
   return execChecker(entry);
 }
 
@@ -800,8 +883,8 @@ async function runFromButton(button, entry) {
   button.disabled = true;
   banner('');
   try {
-    const { tool, count } = await execEntry(entry);
-    announce(`${tool}: ${count} findings`);
+    const { tool, count, note } = await execEntry(entry);
+    announce(`${tool}: ${count} findings${note ? ` (${note})` : ''}`);
   } catch (e) {
     checkerError(e);
   } finally {
@@ -888,25 +971,19 @@ async function refreshTextSpacingButton() {
   }
 }
 
-async function refreshAccnameButton() {
+async function refreshAccnameButton(markers = pageMarkers()) {
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => !!document.getElementById('__a11y-accname-tip'),
-    });
-    $('toggle-accname').textContent = res.result ? 'Stop inspector' : 'Start inspector';
+    const m = await markers;
+    $('toggle-accname').textContent = m.accname ? 'Stop inspector' : 'Start inspector';
   } catch {
     // leave default label
   }
 }
 
-async function refreshFocusLocatorButton() {
+async function refreshFocusLocatorButton(markers = pageMarkers()) {
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => document.documentElement.dataset.a11yFocusLocator === 'on',
-    });
-    $('toggle-focus-locator').textContent = res.result ? 'Stop locator' : 'Start locator';
+    const m = await markers;
+    $('toggle-focus-locator').textContent = m.focusLocator ? 'Stop locator' : 'Start locator';
   } catch {
     // leave default label
   }
@@ -916,14 +993,8 @@ async function refreshFocusLocatorButton() {
 // while no popup or panel was open is picked up here.
 async function refreshErrorCaptureButton() {
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const ec = globalThis.__a11yCheckers && globalThis.__a11yCheckers.errorCapture;
-        if (!ec || document.documentElement.dataset.a11yErrorCapture !== 'on') return null;
-        return { ...ec('status'), findings: ec('collect') };
-      },
-    });
+    await inject([OPS]);
+    const [res] = await pageCall('__a11yOps', 'errorCaptureState');
     const state = res.result;
     $('toggle-error-capture').textContent = state && state.active ? 'Stop capture' : 'Start capture';
     if (state && state.captures) await storeToolFindings('error-capture', state.findings, { final: false });
@@ -934,16 +1005,13 @@ async function refreshErrorCaptureButton() {
 
 // "Resume" when the SW still holds an active log but the page script is gone
 // (the page navigated): starting again continues the same log.
-async function refreshInputWatcherButton() {
+async function refreshInputWatcherButton(markers = pageMarkers()) {
   const key = `watch:${tab.id}`;
   const sw = (await chrome.storage.session.get(key))[key];
   const idle = sw && sw.active ? 'Resume watcher' : 'Start watcher';
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => document.documentElement.dataset.a11yInputWatcher === 'on',
-    });
-    $('toggle-input-watcher').textContent = res.result ? 'Stop watcher' : idle;
+    const m = await markers;
+    $('toggle-input-watcher').textContent = m.inputWatcher ? 'Stop watcher' : idle;
   } catch {
     // No access to the page (side panel after a tab switch): the SW log still
     // says whether a session is open, so the label never keeps another tab's.
@@ -951,13 +1019,28 @@ async function refreshInputWatcherButton() {
   }
 }
 
-async function refreshLiveRegionsButton() {
+// A popup closes when the tester clicks the page, which kills its Auto-update
+// countdown. The page keeps watching and marks the watch (data-a11y-auto-update);
+// the next popup or panel refresh resumes the countdown, or collects the
+// watch at once if it has ended.
+async function resumeAutoUpdate(markers) {
+  if (autoUpdateRunning) return;
+  const tabId = tab.id;
+  let m;
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => document.documentElement.dataset.a11yLiveMonitor === 'on',
-    });
-    $('toggle-live-regions').textContent = res.result ? 'Stop monitor' : 'Start monitor';
+    m = await markers;
+  } catch {
+    return;
+  }
+  // The markers belong to tabId; the side panel may have switched since.
+  if (!m || !m.autoUpdate || autoUpdateRunning || tab.id !== tabId) return;
+  runFromButton($('run-auto-update'), { ...CHECKERS.find((c) => c.id === 'auto-update'), resume: true });
+}
+
+async function refreshLiveRegionsButton(markers = pageMarkers()) {
+  try {
+    const m = await markers;
+    $('toggle-live-regions').textContent = m.liveMonitor ? 'Stop monitor' : 'Start monitor';
   } catch {
     // leave default label
   }
@@ -975,14 +1058,14 @@ function wireCheckers() {
   // Reload and record: the SW installs a page-world hook, reloads the tab and
   // waits for the load; then the audio checker runs with the hook's records.
   // While it runs, recordingAudio keeps the button disabled through the side
-  // panel's restricted-UI reset and stops the panel's reload refresh from
-  // injecting into the page (that injection would carry the click's gesture
-  // and make page audio look user-started). It also holds `tab` fixed: a tab
+  // panel's restricted-UI reset and skips the panel's reload refresh (the run
+  // re-syncs the labels itself when it ends). It also holds `tab` fixed: a tab
   // switch in the side panel is deferred until the run ends, so the reload and
-  // the checker always target the same tab.
+  // the checker always target the same tab. No injection carries the click's
+  // gesture (they all go through the SW), so the checker runs as soon as the
+  // page has settled.
   $('record-audio').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
-    const clickedAt = Date.now();
     const recordedTabId = tab.id;
     recordingAudio = true;
     btn.disabled = true;
@@ -994,7 +1077,7 @@ function wireCheckers() {
         banner(res && res.error ? res.error : 'Could not reload the page with recording hooks.');
         return;
       }
-      await sleep(Math.max(RECORD_SETTLE_MS, ACTIVATION_EXPIRY_MS - (Date.now() - clickedAt)));
+      await sleep(RECORD_SETTLE_MS);
       if (tab.id !== recordedTabId) throw new Error('The tab changed during Reload and record. Run it again.');
       const { count, hooked } = await execAudio(CHECKERS.find((c) => c.id === 'audio'));
       announce(`audio: ${count} findings after a recorded reload`);
@@ -1004,11 +1087,12 @@ function wireCheckers() {
       if (problems.length) banner(problems.join(' '));
       // The reload reset page-side tool state; re-sync the toggle labels.
       refreshTextSpacingButton();
-      refreshAccnameButton();
-      refreshLiveRegionsButton();
-      refreshFocusLocatorButton();
+      const markers = pageMarkers();
+      refreshAccnameButton(markers);
+      refreshLiveRegionsButton(markers);
+      refreshFocusLocatorButton(markers);
       refreshErrorCaptureButton();
-      refreshInputWatcherButton();
+      refreshInputWatcherButton(markers);
     } catch (err) {
       checkerError(err);
     } finally {
@@ -1055,8 +1139,7 @@ function wireCheckers() {
     }
   });
 
-  // Focus locator: watches focus while the tester presses Tab by hand. Like
-  // every popup injection, starting it gives the page user activation (#15).
+  // Focus locator: watches focus while the tester presses Tab by hand.
   $('toggle-focus-locator').addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
@@ -1198,11 +1281,8 @@ function wireCheckers() {
 
   $('clear-overlays').addEventListener('click', async () => {
     try {
-      await inject([OVERLAY], true);
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        func: () => globalThis.__a11yOverlay && globalThis.__a11yOverlay.clear(),
-      });
+      await inject([OVERLAY, OPS], true);
+      await pageCall('__a11yOps', 'clearOverlays', [], true);
     } catch (e) {
       checkerError(e);
     }
@@ -1220,11 +1300,8 @@ function wireCheckers() {
       // The SW log first: it needs no page access, so a failed injection
       // below cannot leave it behind.
       await send({ type: 'inputWatch', action: 'stop' });
-      await inject([OVERLAY], true);
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        func: () => globalThis.__a11yOverlay && globalThis.__a11yOverlay.clear(),
-      });
+      await inject([OVERLAY, OPS], true);
+      await pageCall('__a11yOps', 'clearOverlays', [], true);
       await inject([...LIBS, 'checkers/text-spacing.js'], true);
       await callChecker('textSpacing', 'remove', true);
       $('toggle-text-spacing').textContent = 'Apply overrides';
@@ -1239,19 +1316,13 @@ function wireCheckers() {
       $('toggle-focus-locator').textContent = 'Start locator';
       // Error capture and the Input watcher: inject only when the page says
       // one is running.
-      const [running] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => ({
-          error: document.documentElement.dataset.a11yErrorCapture === 'on',
-          watch: document.documentElement.dataset.a11yInputWatcher === 'on',
-        }),
-      });
-      if (running.result.error) {
+      const running = await pageMarkers();
+      if (running.errorCapture) {
         await inject(ERROR_FILES);
         await callChecker('errorCapture', 'stop');
       }
       $('toggle-error-capture').textContent = 'Start capture';
-      if (running.result.watch) {
+      if (running.inputWatcher) {
         await inject(WATCH_FILES);
         await callChecker('inputWatcher', 'stop');
       }
@@ -1335,6 +1406,7 @@ function setRestrictedUI(on) {
     const reflowBatchBox = document.querySelector('.batch-select[data-batch-id="reflow"]');
     if (reflowBatchBox) reflowBatchBox.disabled = !reflowOn;
     $('record-audio').disabled = recordingAudio;
+    $('run-auto-update').disabled = autoUpdateRunning;
   }
 }
 
@@ -1365,11 +1437,14 @@ async function refreshForActiveTab() {
   if (token !== refreshToken) return;
   renderReport(store);
   refreshTextSpacingButton();
-  refreshAccnameButton();
-  refreshLiveRegionsButton();
-  refreshFocusLocatorButton();
+  // One read of the page markers for every label (and a watch to resume).
+  const markers = pageMarkers();
+  refreshAccnameButton(markers);
+  refreshLiveRegionsButton(markers);
+  refreshFocusLocatorButton(markers);
   refreshErrorCaptureButton();
-  refreshInputWatcherButton();
+  refreshInputWatcherButton(markers);
+  resumeAutoUpdate(markers);
   // Catch up on watcher entries logged while no popup was open (a
   // navigation, for example).
   syncWatchFindings().catch(() => {});
@@ -1399,6 +1474,7 @@ async function init() {
 
   await refreshForActiveTab();
   initBatchSelection(); // once — the selection is a user preference, not per-tab
+  initAutoUpdateSeconds(); // likewise
 
   chrome.runtime.onMessage.addListener((msg, sender) => {
     if (msg && msg.type === 'stateChanged' && tab && msg.tabId === tab.id) {
@@ -1438,8 +1514,7 @@ async function init() {
     });
     chrome.tabs.onUpdated.addListener((tabId, info) => {
       // Fires for every tab — only react to the one this panel tracks.
-      // Skipped during Reload and record: the refresh would inject into the
-      // reloaded page while the Record click's activation is still live.
+      // Skipped during Reload and record, which re-syncs when it ends.
       if (recordingAudio) return;
       if (tab && tabId === tab.id && (info.status === 'complete' || info.url)) {
         refreshForActiveTab();

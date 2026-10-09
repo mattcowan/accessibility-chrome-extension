@@ -99,6 +99,19 @@
       <span class="badge" id="badge-audio" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="auto-update"
+        title="Include in Run selected (watches the page first, before the other checkers)" aria-label="Include Auto-update in Run selected">
+      <span class="name">Auto-update <small>2.2.2 / 4.1.2 (TT 2.C, 2.D) — content that changes on its own</small>
+        <label class="inline-toggle" title="How long to watch, in whole seconds (1 to 300; default 10)">
+          Watch for <input type="number" id="auto-update-seconds" min="1" max="300" step="1" value="10"> seconds
+        </label>
+      </span>
+      <button type="button" id="run-auto-update"
+        title="Watch the page for the set time and report content that updates on its own: whether a control can pause it, and how the user is told about each update. Do not touch the page while it watches.">Run</button>
+      <span id="auto-update-progress"></span>
+      <span class="badge" id="badge-auto-update" hidden></span>
+    </div>
+    <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="text-spacing-analyze"
         title="Include the Analyze clipping pass in Run selected" aria-label="Include Text spacing analysis in Run selected">
       <span class="name">Text spacing <small>1.4.12</small></span>

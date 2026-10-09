@@ -1,5 +1,6 @@
 // Message router + lifecycle events. All debugger/CDP logic lives in
-// debugger-manager.js; checkers are run by the popup via chrome.scripting.
+// debugger-manager.js; checkers are run by the popup, which injects them
+// through the `exec` route here (see handleExec).
 
 import * as dbg from './debugger-manager.js';
 import { AUDIO_HOOK_SOURCE } from './audio-hook.js';
@@ -84,6 +85,9 @@ async function handle(msg, sender) {
     case 'inputWatch':
       return handleInputWatch(msg, sender);
 
+    case 'exec':
+      return handleExec(msg, sender);
+
     case 'resetTab': {
       const res = await dbg.updateTabState(tabId, (s) => Object.assign(s, dbg.defaultTabState()));
       broadcast(tabId, res.state);
@@ -93,6 +97,64 @@ async function handle(msg, sender) {
     default:
       return { ok: false, error: `Unknown message type: ${type}` };
   }
+}
+
+// Every popup / side-panel injection comes through here (#15). A
+// chrome.scripting call made from the popup passes the click's user gesture
+// into the page: the page gets user activation and can start audio the
+// autoplay policy blocked. The SW is not gesture-free by itself either —
+// Chrome forwards the sender's gesture into this onMessage dispatch, so an
+// executeScript made in the same task leaks it too. Waiting one task first
+// drops it (verified 2026-10-08: after a microtask or a setTimeout(0), the
+// page's hasBeenActive stays false). Do not remove the wait.
+//   {files, allFrames}                  -> {ok}
+//   {global, method, args, allFrames}   -> {ok, results: [{frameId, result}]}
+// The call form runs globalThis[global][method](...args) in the isolated
+// world; only the namespaces below can be called, and only their own
+// function properties (not inherited names such as constructor).
+const EXEC_GLOBALS = new Set(['__a11yCheckers', '__a11yHover', '__a11yOps']);
+
+async function handleExec(msg, sender) {
+  // Extension pages only (popup, side panel, the E2E popup tab). A content
+  // script's sender.url is the page's URL.
+  if (!sender || sender.id !== chrome.runtime.id || !(sender.url || '').startsWith(chrome.runtime.getURL(''))) {
+    return { ok: false, error: 'exec is for extension pages only' };
+  }
+  await new Promise((r) => setTimeout(r, 0)); // leave the forwarded gesture behind
+  const target = { tabId: msg.tabId, allFrames: msg.allFrames === true };
+  if (Array.isArray(msg.files)) {
+    await chrome.scripting.executeScript({ target, files: msg.files });
+    return { ok: true };
+  }
+  if (!EXEC_GLOBALS.has(msg.global) || typeof msg.method !== 'string') {
+    return { ok: false, error: `exec cannot call ${msg.global}.${msg.method}` };
+  }
+  // An error thrown inside an injected function does NOT reject
+  // executeScript: that frame's result is just null (verified 2026-10-09).
+  // A crashed checker would read as "0 findings". So the wrapper catches and
+  // returns the error, and a top-frame error fails the call. An error in a
+  // subframe only drops that frame's result, as before.
+  const results = await chrome.scripting.executeScript({
+    target,
+    func: async (g, m, a) => {
+      try {
+        const o = globalThis[g];
+        if (!o || !Object.hasOwn(o, m) || typeof o[m] !== 'function') {
+          throw new Error(`exec: ${g}.${m} is not a page method (inject its file first)`);
+        }
+        return { value: await o[m](...a) };
+      } catch (e) {
+        return { error: (e && e.message) || String(e) };
+      }
+    },
+    args: [msg.global, msg.method, Array.isArray(msg.args) ? msg.args : []],
+  });
+  const top = results.find((r) => r.frameId === 0);
+  if (top && top.result && top.result.error) return { ok: false, error: top.result.error };
+  return {
+    ok: true,
+    results: results.map((r) => ({ frameId: r.frameId, result: r.result && !r.result.error ? r.result.value : null })),
+  };
 }
 
 // Debugger holds (see debugger-manager.js) for the click-listener read and

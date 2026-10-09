@@ -1,6 +1,6 @@
 // Live-region detection shared by the live-region monitor (4.1.3), Error
-// capture (3.3.1) and the Input watcher (4.1.2). Injected (classic script)
-// before any of them.
+// capture (3.3.1), the Input watcher (4.1.2) and Auto-update (TT 2.D).
+// Injected (classic script) before any of them.
 //   REGION_SELECTOR      -> elements that can be live regions
 //   politenessFor(el)    -> 'polite' | 'assertive' | null (not live)
 //   regionOf(node)       -> the closest live ancestor-or-self element, or null
