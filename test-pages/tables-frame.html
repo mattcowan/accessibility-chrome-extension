@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Table in a frame</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0.5rem; }
+    table { border-collapse: collapse; }
+    td { border: 1px solid #999; padding: 0.2rem 0.6rem; }
+  </style>
+</head>
+<body>
+  <!-- Framed fixture for tables.html: a bordered data table with no th.
+       The tool guesses data (borders, short text), so no headers is review.
+       Chrome's role is not read in frames. -->
+  <table id="frame-noth" data-expect="review" data-expect-class="data">
+    <tr><td>Name</td><td>Score</td></tr>
+    <tr><td>Ann</td><td>91</td></tr>
+    <tr><td>Bob</td><td>78</td></tr>
+  </table>
+</body>
+</html>

@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tables (TT section 14)</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.6;
+      color: #333;
+    }
+    h1 { color: #0066cc; }
+    .test-section {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      background: #f9f9f9;
+    }
+    .test-section h2 { margin-top: 0; font-size: 1rem; }
+    /* No global table borders: cell borders are a data-table sign. */
+    table { border-collapse: collapse; margin: 0.5rem 0; }
+    th, td { padding: 0.2rem 0.6rem; text-align: left; vertical-align: top; }
+    .bordered th, .bordered td { border: 1px solid #999; }
+    .head-row td { font-weight: 700; background: #dde6f0; }
+    .split { margin: 0; }
+    [role="row"] { display: flex; gap: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Tables</h1>
+  <p>
+    Fixture for the Tables checker (WCAG 1.3.1, Trusted Tester section 14).
+    Each table has <code>data-expect</code> (the severity of its finding, or <code>pass</code> for none),
+    <code>data-expect-class</code> (the tool's guess: data, layout or unsure) and, where it is stable,
+    <code>data-expect-chrome</code> (the role in Chrome's accessibility tree).
+    A cell with <code>data-expect-headers</code> lists the header texts the HTML header algorithm gives it, joined with "|".
+  </p>
+
+  <div class="test-section">
+    <h2>(a) Simple data table: th with scope="col"</h2>
+    <table id="simple-data" class="bordered" data-expect="pass" data-expect-class="data" data-expect-chrome="table">
+      <tr><th scope="col">Name</th><th scope="col">Age</th><th scope="col">City</th></tr>
+      <tr><td>Ann</td><td data-expect-headers="Age">30</td><td>Oslo</td></tr>
+      <tr><td>Bob</td><td>40</td><td>Rome</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(b) Row and column headers with scope, empty td corner</h2>
+    <table id="row-col-headers" class="bordered" data-expect="pass" data-expect-class="data" data-expect-chrome="table">
+      <tr><td></td><th scope="col">Q1</th><th scope="col">Q2</th></tr>
+      <tr><th scope="row">Revenue</th><td data-expect-headers="Revenue|Q1">10</td><td>12</td></tr>
+      <tr><th scope="row">Costs</th><td>7</td><td data-expect-headers="Costs|Q2">8</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(c) Row and column headers with no scope (the header algorithm decides)</h2>
+    <table id="auto-headers" class="bordered" data-expect="pass" data-expect-class="data" data-expect-chrome="table">
+      <tr><td></td><th>Q1</th><th>Q2</th></tr>
+      <tr><th>Revenue</th><td data-expect-headers="Revenue|Q1">10</td><td>12</td></tr>
+      <tr><th>Costs</th><td>7</td><td data-expect-headers="Costs|Q2">8</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(d) Looks like data, no th, no borders: Chrome guesses layout</h2>
+    <table id="noth-plain" data-expect="review" data-expect-class="unsure" data-expect-chrome="LayoutTable"
+      data-expect-confirmed-data="fail">
+      <tr><td>Name</td><td>Age</td><td>City</td></tr>
+      <tr><td>Ann</td><td>30</td><td>Oslo</td></tr>
+      <tr><td>Bob</td><td>40</td><td>Rome</td></tr>
+      <tr><td>Cy</td><td>50</td><td>Kyiv</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(e) Header row styled bold with a background, but coded as td</h2>
+    <table id="styled-td-header" class="bordered" data-expect="warn" data-expect-class="data" data-expect-chrome="table">
+      <tr class="head-row"><td>Product</td><td>Price</td><td>Stock</td></tr>
+      <tr><td>Pen</td><td>1.20</td><td>40</td></tr>
+      <tr><td>Ink</td><td>3.50</td><td>12</td></tr>
+      <tr><td>Pad</td><td>2.10</td><td>7</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(f) Layout table: one row, navigation and an article</h2>
+    <table id="layout-plain" data-expect="pass" data-expect-class="layout" data-expect-chrome="LayoutTable">
+      <tr>
+        <td>
+          <ul><li><a href="#a">Home</a></li><li><a href="#b">News</a></li></ul>
+        </td>
+        <td>
+          <h3>Welcome</h3>
+          <p>This column holds the main content of the page. Old sites used tables like this to place a sidebar next to the content.</p>
+          <p>A screen reader should not announce rows and columns here.</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(g) Layout table with th cells (data markup in a layout table)</h2>
+    <table id="layout-th" data-expect="review" data-expect-class="unsure" data-expect-confirmed-layout="fail">
+      <tr><th>Navigation</th><th>Content</th></tr>
+      <tr>
+        <td>
+          <ul><li><a href="#c">Products</a></li><li><a href="#d">Support</a></li><li><a href="#e">About us</a></li></ul>
+          <p>Sign up for our newsletter to hear about new products, support articles and events in your area before anyone else does.</p>
+        </td>
+        <td>This cell holds a long block of page content that a site put in a table only to place it next to the navigation. It is not tabular data, and its two header cells only label the page areas, which is the classic misuse of th in a layout table. Old content management systems made many pages like this one, and many of them are still online today.</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(h) Layout table with role="presentation"</h2>
+    <table id="presentation-clean" role="presentation" data-expect="pass" data-expect-class="layout">
+      <tr>
+        <td><h3>Left</h3><p>Some content on the left side of the page.</p></td>
+        <td><h3>Right</h3><p>Some content on the right side of the page.</p></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(i) role="presentation" with aria-label: Chrome ignores the role</h2>
+    <table id="presentation-label" role="presentation" aria-label="Page layout" data-expect="review" data-expect-class="layout" data-expect-chrome="table">
+      <tr>
+        <td><h3>Left</h3><p>Some content on the left side of the page.</p></td>
+        <td><h3>Right</h3><p>Some content on the right side of the page.</p></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(j) Empty header cell (not the corner)</h2>
+    <table id="empty-th" class="bordered" data-expect="fail" data-expect-class="data">
+      <tr><th scope="col">Name</th><th scope="col">Age</th><th scope="col"></th></tr>
+      <tr><td>Ann</td><td>30</td><td>Oslo</td></tr>
+      <tr><td>Bob</td><td>40</td><td>Rome</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(k) Empty top-left header cell</h2>
+    <table id="corner-th-empty" class="bordered" data-expect="review" data-expect-class="data">
+      <tr><th></th><th scope="col">Q1</th><th scope="col">Q2</th></tr>
+      <tr><th scope="row">Revenue</th><td>10</td><td>12</td></tr>
+      <tr><th scope="row">Costs</th><td>7</td><td>8</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(l) headers attribute: a missing id, and an id of a td</h2>
+    <table id="bad-headers" class="bordered" data-expect="fail" data-expect-class="data">
+      <tr><th id="bh-name">Name</th><th id="bh-age">Age</th></tr>
+      <tr><td id="bh-ann" headers="bh-name nope">Ann</td><td headers="bh-age" data-expect-headers="Age">30</td></tr>
+      <tr><td headers="bh-ann">Bob</td><td headers="bh-age">40</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(m) scope value that is not valid</h2>
+    <table id="bad-scope" class="bordered" data-expect="fail" data-expect-class="data">
+      <tr><th scope="column">Name</th><th scope="col">Age</th></tr>
+      <tr><td>Ann</td><td>30</td></tr>
+      <tr><td>Bob</td><td>40</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(n) scope on a td</h2>
+    <table id="td-scope" class="bordered" data-expect="review" data-expect-class="data">
+      <tr><th scope="col">Name</th><th scope="col">Age</th></tr>
+      <tr><td scope="row">Ann</td><td>30</td></tr>
+      <tr><td>Bob</td><td>40</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(o) Two header levels with colspan, no scope</h2>
+    <table id="complex-auto" class="bordered" data-expect="review" data-expect-class="data">
+      <tr><th colspan="2">2024</th><th colspan="2">2025</th></tr>
+      <tr><th>Q1</th><th>Q2</th><th>Q1</th><th>Q2</th></tr>
+      <tr><td>4</td><td>5</td><td data-expect-headers="2025|Q1">6</td><td>7</td></tr>
+      <tr><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(p) Two header levels with colgroup and scope</h2>
+    <table id="complex-scoped" class="bordered" data-expect="pass" data-expect-class="data">
+      <colgroup><col></colgroup>
+      <colgroup span="2"></colgroup>
+      <colgroup span="2"></colgroup>
+      <thead>
+        <tr><td rowspan="2"></td><th scope="colgroup" colspan="2">2024</th><th scope="colgroup" colspan="2">2025</th></tr>
+        <tr><th scope="col">Q1</th><th scope="col">Q2</th><th scope="col">Q1</th><th scope="col">Q2</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">Sales</th><td>4</td><td>5</td><td>6</td><td data-expect-headers="Sales|Q2|2025">7</td></tr>
+        <tr><th scope="row">Costs</th><td data-expect-headers="Costs|Q1|2024">1</td><td>2</td><td>3</td><td>4</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(q) Row groups with scope="rowgroup"</h2>
+    <table id="rowgroup" class="bordered" data-expect="pass" data-expect-class="data">
+      <thead><tr><th scope="col">Item</th><th scope="col">Price</th><th scope="col">Stock</th></tr></thead>
+      <tbody>
+        <tr><th scope="rowgroup" colspan="3">Fruit</th></tr>
+        <tr><th scope="row">Apple</th><td data-expect-headers="Apple|Price|Fruit">0.50</td><td>100</td></tr>
+        <tr><th scope="row">Pear</th><td>0.70</td><td>60</td></tr>
+      </tbody>
+      <tbody>
+        <tr><th scope="rowgroup" colspan="3">Vegetables</th></tr>
+        <tr><th scope="row">Leek</th><td>1.10</td><td data-expect-headers="Leek|Stock|Vegetables">20</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(r) Complex table with correct headers and id</h2>
+    <table id="headers-attr" class="bordered" data-expect="pass" data-expect-class="data">
+      <tr><td></td><th id="ha-mon">Monday</th><th id="ha-tue">Tuesday</th></tr>
+      <tr><th id="ha-am" colspan="3">Morning</th></tr>
+      <tr><th id="ha-room1" headers="ha-am">Room 1</th><td headers="ha-am ha-room1 ha-mon" data-expect-headers="Morning|Room 1|Monday">Yoga</td><td headers="ha-am ha-room1 ha-tue">Pilates</td></tr>
+      <tr><th id="ha-pm" colspan="3">Afternoon</th></tr>
+      <tr><th id="ha-room2" headers="ha-pm">Room 2</th><td headers="ha-pm ha-room2 ha-mon">Spin</td><td headers="ha-pm ha-room2 ha-tue" data-expect-headers="Afternoon|Room 2|Tuesday">Boxing</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(s) Header row in a separate table (a sticky-header grid)</h2>
+    <table id="split-head" class="split" data-expect="review" data-expect-class="unsure">
+      <tr><th>Order</th><th>Date</th><th>Total</th></tr>
+    </table>
+    <table id="split-body" class="split" data-expect="review" data-expect-class="unsure">
+      <tr><td>1001</td><td>3 May</td><td>20.00</td></tr>
+      <tr><td>1002</td><td>4 May</td><td>35.50</td></tr>
+      <tr><td>1003</td><td>9 May</td><td>12.25</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(t) th that heads neither a row nor a column</h2>
+    <table id="ambiguous-th" class="bordered" data-expect="review" data-expect-class="data">
+      <tr><th scope="col">Item</th><th scope="col">Price</th></tr>
+      <tr><td>Pen</td><td>1.20</td></tr>
+      <tr><td>Ink</td><td>3.50</td></tr>
+      <tr><th>Total</th><td>4.70</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(u) ARIA table with rows and headers</h2>
+    <div id="aria-good" role="table" aria-label="People" data-expect="pass" data-expect-class="data" data-expect-chrome="table">
+      <div role="row"><span role="columnheader">Name</span><span role="columnheader">Age</span></div>
+      <div role="row"><span role="cell">Ann</span><span role="cell" data-expect-headers="Age">30</span></div>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>(v) ARIA table with a cell outside any row</h2>
+    <div id="aria-broken" role="table" aria-label="Broken" data-expect="fail" data-expect-class="data">
+      <div role="row"><span role="columnheader">Name</span><span role="columnheader">Age</span></div>
+      <span role="cell">Ann</span><span role="cell">30</span>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>(w) ARIA grid with no headers</h2>
+    <div id="aria-grid-noheaders" role="grid" aria-label="Seats" data-expect="review" data-expect-class="data" data-expect-chrome="grid">
+      <div role="row"><span role="gridcell" tabindex="0">A1</span><span role="gridcell" tabindex="-1">A2</span></div>
+      <div role="row"><span role="gridcell" tabindex="-1">B1</span><span role="gridcell" tabindex="-1">B2</span></div>
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>(x) Layout table that holds a data table</h2>
+    <table id="nested-outer" data-expect="pass" data-expect-class="layout">
+      <tr>
+        <td><p>Prices for this week.</p></td>
+        <td>
+          <table id="nested-inner" class="bordered" data-expect="pass" data-expect-class="data" data-expect-chrome="table">
+            <tr><th scope="col">Day</th><th scope="col">Price</th></tr>
+            <tr><td>Mon</td><td data-expect-headers="Price">2.00</td></tr>
+            <tr><td>Tue</td><td>2.20</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(y) display:block on a data table</h2>
+    <table id="display-block" class="bordered" style="display: block" data-expect="pass" data-expect-class="data" data-expect-chrome="table">
+      <tr><th scope="col">Name</th><th scope="col">Age</th></tr>
+      <tr><td>Ann</td><td>30</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(z) Hidden table (display:none): not checked</h2>
+    <table id="hidden-table" style="display: none" data-expect="pass">
+      <tr><th scope="column"></th></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(aa) Table in a same-origin iframe</h2>
+    <iframe id="tables-frame" src="tables-frame.html" title="Table in a frame" width="420" height="160"></iframe>
+  </div>
+</body>
+</html>

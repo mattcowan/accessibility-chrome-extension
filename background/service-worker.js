@@ -82,6 +82,9 @@ async function handle(msg, sender) {
     case 'clickListeners':
       return handleClickListeners(tabId);
 
+    case 'tableAX':
+      return handleTableAX(tabId);
+
     case 'inputWatch':
       return handleInputWatch(msg, sender);
 
@@ -157,8 +160,8 @@ async function handleExec(msg, sender) {
   };
 }
 
-// Debugger holds (see debugger-manager.js) for the click-listener read and
-// Reload and record. The hover probe uses holdHover/touchHover/releaseHover.
+// Debugger holds (see debugger-manager.js) for the click-listener read, the
+// table-role read and Reload and record. The hover probe uses holdHover/touchHover/releaseHover.
 function holdDebugger(tabId) {
   dbg.holdDebugger(tabId);
 }
@@ -212,6 +215,24 @@ async function handleClickListeners(tabId) {
     if (!attach.ok) return { ok: false, error: attach.error };
     const { paths, truncated } = await dbg.clickListenerPaths(tabId);
     return { ok: true, paths, truncated };
+  } finally {
+    await releaseDebugger(tabId);
+  }
+}
+
+// The Tables checker (1.3.1 / TT section 14) shows Chrome's role for each
+// table (LayoutTable or table), which only the accessibility tree has. Same
+// cycle as the click listeners: hold, attach, read, release.
+async function handleTableAX(tabId) {
+  if (recordingTabs.has(tabId)) {
+    return { ok: false, error: 'Reload and record is running on this tab' };
+  }
+  holdDebugger(tabId);
+  try {
+    const attach = await dbg.ensureAttached(tabId);
+    if (!attach.ok) return { ok: false, error: attach.error };
+    const { tables, truncated } = await dbg.tableRoles(tabId);
+    return { ok: true, tables, truncated };
   } finally {
     await releaseDebugger(tabId);
   }
@@ -398,7 +419,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   dbg.clearHolds(tabId);
   await dbg.clearTabState(tabId);
-  await chrome.storage.session.remove([`findings:${tabId}`, watchKey(tabId)]);
+  await chrome.storage.session.remove([`findings:${tabId}`, watchKey(tabId), `tables:${tabId}`]);
 });
 
 // Re-apply emulation on navigation. Overrides should persist within a session,

@@ -28,9 +28,12 @@ let tabSwitchedWhileRecording = false; // side panel: re-sync once recording end
 // watcher.
 const LIVE = 'checkers/lib/live.js';
 const LIVE_FILES = [...LIBS, LIVE, 'checkers/live-regions.js'];
+// Table model (HTML header algorithm), shared by Tables and the form tools.
+const TABLE_LIB = 'checkers/lib/table.js';
+const TABLE_FILES = ['checkers/lib/resolve.js', TABLE_LIB, 'checkers/tables.js'];
 // Form-field helpers (group labels, table headers, nearby text) for the three
 // Trusted Tester section 5 tools.
-const FORMS = ['checkers/lib/accname.js', 'checkers/lib/forms.js'];
+const FORMS = ['checkers/lib/accname.js', TABLE_LIB, 'checkers/lib/forms.js'];
 const ERROR_FILES = [...LIBS, ...FORMS, FOCUS_STYLE, LIVE, 'checkers/error-capture.js'];
 const WATCH_FILES = [...LIBS, ...FORMS, LIVE, 'checkers/input-watcher.js'];
 const LIVE_LOG_COLUMNS = ['selector', 'politeness', 'role', 'message', 'timestamp', 'url'];
@@ -295,6 +298,7 @@ const BADGE_BY_TOOL = {
   'focus-visibility': 'badge-focus',
   'keyboard-access': 'badge-keyboard-access',
   'form-labels': 'badge-form-labels',
+  tables: 'badge-tables',
   'error-capture': 'badge-error-capture',
   'input-watcher': 'badge-input-watcher',
   'target-size': 'badge-target-size',
@@ -330,9 +334,10 @@ function renderBadge(tool, findings) {
 }
 
 async function clearFindingsStore() {
-  await chrome.storage.session.remove(findingsKey());
+  await chrome.storage.session.remove([findingsKey(), tablesKey()]);
   for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
   renderReport({ url: tab.url, tools: {} });
+  renderTables(null);
 }
 
 function allFindings(store) {
@@ -627,6 +632,9 @@ const CHECKERS = [
   { id: 'form-labels', tool: 'form-labels', buttonId: 'run-form-labels', kind: 'simple',
     files: [...FORMS, 'checkers/form-labels.js'], fnName: 'formLabels', allFrames: true,
     batchDefault: true },
+  { id: 'tables', tool: 'tables', buttonId: 'run-tables', kind: 'tables',
+    files: TABLE_FILES,
+    batchDefault: true },
   { id: 'target-size', tool: 'target-size', buttonId: 'run-target-size', kind: 'simple',
     files: [OVERLAY, 'checkers/target-size.js'], fnName: 'targetSize', allFrames: true,
     batchDefault: true },
@@ -871,11 +879,220 @@ async function watchAndCollect(entry) {
   return { tool: 'auto-update', count: stored.findings.length, note: `watched ${Math.round(watchedMs / 1000)} seconds` };
 }
 
-function execEntry(entry) {
+// ------------------------------------------------------------------- tables
+
+// Tables (1.3.1 / TT section 14). The SW reads Chrome's role for each table
+// first (debugger, top document only); then the checker runs in every frame
+// with those roles and the tester's saved Data / Layout choices
+// (chrome.storage.local `tableClass:${normUrl}`, keyed `${page}|${selector}`).
+// draw: the Run button draws the overlay; a batch run and a changed choice
+// only scan (the page redraws an overlay that is already on). The last list
+// is kept in chrome.storage.session `tables:${tabId}` for the next popup.
+const tablesKey = () => `tables:${tab.id}`;
+const tableClassKey = () => `tableClass:${normUrl(tab.url)}`;
+const TABLES_ENTRY = () => CHECKERS.find((c) => c.id === 'tables');
+// The stamp of the list this page stored last. The side panel re-renders a
+// list that the popup stored, but not its own (that would drop focus from
+// the radio button just changed).
+let ownTablesStamp = null;
+
+async function execTables(entry, { draw = true } = {}) {
+  const ax = await send({ type: 'tableAX' }).catch((e) => ({ ok: false, error: e.message }));
+  const overrides = (await chrome.storage.local.get(tableClassKey()))[tableClassKey()] || {};
+  await inject([...LIBS, ...entry.files], true);
+  const arg = {
+    action: draw ? 'show' : 'scan',
+    axTables: ax && ax.ok ? ax.tables : null,
+    axError: ax && ax.ok ? null : (ax && ax.error) || 'no response',
+    overrides,
+  };
+  const results = await callChecker('tables', arg, true);
+  const tables = [];
+  const findings = [];
+  for (const r of results) {
+    if (!r.result) continue;
+    tables.push(...(r.result.tables || []));
+    findings.push(...(r.result.findings || []));
+  }
+  let note = '';
+  if (!ax || !ax.ok) {
+    note =
+      `Chrome's role for each table could not be read (${(ax && ax.error) || 'no response'}), so the data or layout guess does not use it and no finding checks it. ` +
+      'Close DevTools on this tab and run the check again.';
+  } else if (ax.truncated) {
+    note = 'The page has more tables than the tool reads Chrome roles for. Some tables have no Chrome role.';
+  }
+  if (note && tables.length) {
+    findings.push({ tool: 'tables', wcag: '1.3.1', severity: 'review', selector: '(page)', snippet: '', details: note });
+  }
+  ownTablesStamp = `${Date.now()}-${Math.random()}`;
+  await chrome.storage.session.set({ [tablesKey()]: { url: tab.url, tables, stamp: ownTablesStamp } });
+  renderTables(tables);
+  const stored = await storeToolFindings('tables', findings);
+  if (draw) $('toggle-tables-overlay').textContent = 'Hide overlay';
+  return { tool: 'tables', count: stored.findings.length, note: `${tables.length} table${tables.length === 1 ? '' : 's'}`, tables };
+}
+
+const CLASS_NAMES = { data: 'Data', layout: 'Layout', unsure: 'Unsure' };
+
+function chromeText(c) {
+  switch (c.status) {
+    case 'ok':
+      return `Chrome: ${c.role}`;
+    case 'frame':
+      return 'Chrome: not read (in a frame)';
+    case 'error':
+      return 'Chrome: not read (see the page note)';
+    case 'missing':
+      return 'Chrome: not found';
+    default:
+      return 'Chrome: not read';
+  }
+}
+
+// One list item per table. Rebuilt on every run; `focus` puts focus back on
+// the radio button that was just changed.
+function renderTables(tables, focus = null) {
+  const panel = $('tables-panel');
+  const list = $('tables-list');
+  if (!tables) {
+    panel.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  panel.hidden = false;
+  const counts = { data: 0, layout: 0, unsure: 0 };
+  for (const t of tables) counts[t.cls]++;
+  $('tables-summary').textContent = tables.length
+    ? `${tables.length} table${tables.length === 1 ? '' : 's'}: ${counts.data} data, ${counts.layout} layout, ${counts.unsure} not decided.`
+    : 'No tables found on this page.';
+  list.replaceChildren();
+  tables.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.className = 'table-item';
+
+    const line = document.createElement('div');
+    line.className = 'table-line';
+    const reveal = document.createElement('button');
+    reveal.type = 'button';
+    reveal.className = 'table-reveal secondary';
+    reveal.dataset.selector = t.selector;
+    reveal.dataset.severity = t.severity || 'review';
+    reveal.textContent = t.label;
+    reveal.title = `Scroll to and highlight ${t.label} (${t.selector})`;
+    const cls = document.createElement('strong');
+    cls.textContent = `${CLASS_NAMES[t.cls]}${t.confirmed ? ' (your choice)' : " (tool's guess)"}`;
+    line.append(reveal, cls);
+    if (t.severity) {
+      const sev = document.createElement('span');
+      sev.className = `sev sev-${t.severity}`;
+      sev.textContent = t.severity;
+      line.appendChild(sev);
+    }
+    li.appendChild(line);
+
+    const facts = document.createElement('p');
+    facts.className = 'table-facts';
+    facts.textContent = `${t.rows} × ${t.cols}${t.kind === 'aria' ? ' (ARIA)' : ''} · ${chromeText(t.chrome)}`;
+    li.appendChild(facts);
+
+    // The tester's choice. "Tool's guess" removes a saved choice.
+    const group = document.createElement('fieldset');
+    group.className = 'table-class';
+    const legend = document.createElement('legend');
+    legend.textContent = `${t.label} is a`;
+    group.appendChild(legend);
+    const options = [
+      ['auto', `Tool's guess (${CLASS_NAMES[t.guess]})`],
+      ['data', 'Data table'],
+      ['layout', 'Layout table'],
+    ];
+    for (const [value, text] of options) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = `table-class-${i}`;
+      input.value = value;
+      input.dataset.key = t.key;
+      input.checked = (t.confirmed || 'auto') === value;
+      label.append(input, ` ${text}`);
+      group.appendChild(label);
+    }
+    li.appendChild(group);
+
+    if (t.issues.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'table-issues';
+      for (const issue of t.issues) {
+        const item = document.createElement('li');
+        item.textContent = `${issue.severity}: ${issue.text}`;
+        ul.appendChild(item);
+      }
+      li.appendChild(ul);
+    }
+
+    const evidence = document.createElement('details');
+    evidence.className = 'table-evidence';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Why the tool guessed this';
+    const ev = document.createElement('ul');
+    for (const [side, items] of [['Signs of data', t.signals.data], ['Signs of layout', t.signals.layout]]) {
+      const item = document.createElement('li');
+      item.textContent = `${side}: ${items.length ? items.join(', ') : 'none'}.`;
+      ev.appendChild(item);
+    }
+    evidence.append(sum, ev);
+    li.appendChild(evidence);
+
+    const check = document.createElement('p');
+    check.className = 'table-check';
+    check.textContent = t.check;
+    li.appendChild(check);
+
+    list.appendChild(li);
+  });
+  if (focus) {
+    const again = [...list.querySelectorAll('input[type="radio"]')].find(
+      (r) => r.dataset.key === focus.key && r.value === focus.value
+    );
+    if (again) again.focus();
+  }
+}
+
+async function renderStoredTables() {
+  const stored = (await chrome.storage.session.get(tablesKey()))[tablesKey()];
+  renderTables(stored && normUrl(stored.url) === normUrl(tab.url) ? stored.tables : null);
+}
+
+// Save the tester's Data / Layout choice ('auto' removes it), then check
+// again so the findings and the overlay use it.
+async function setTableClass(key, value) {
+  const k = tableClassKey();
+  const all = (await chrome.storage.local.get(k))[k] || {};
+  if (value === 'auto') delete all[key];
+  else all[key] = value;
+  if (Object.keys(all).length) await chrome.storage.local.set({ [k]: all });
+  else await chrome.storage.local.remove(k);
+  const { count, tables } = await execTables(TABLES_ENTRY(), { draw: false });
+  renderTables(tables, { key, value });
+  announce(`tables: saved. ${count} findings.`);
+}
+
+async function refreshTablesButton(markers = pageMarkers()) {
+  try {
+    const m = await markers;
+    $('toggle-tables-overlay').textContent = m.tables ? 'Hide overlay' : 'Show overlay';
+  } catch {
+    // leave default label
+  }
+}
+
+function execEntry(entry, opts = {}) {
   if (entry.kind === 'hover') return execHover(entry);
   if (entry.kind === 'audio') return execAudio(entry);
   if (entry.kind === 'keyboard') return execKeyboardAccess(entry);
   if (entry.kind === 'auto-update') return execAutoUpdate(entry);
+  if (entry.kind === 'tables') return execTables(entry, { draw: !opts.batch });
   return execChecker(entry);
 }
 
@@ -943,7 +1160,7 @@ async function runBatch() {
       continue;
     }
     try {
-      const { count } = await execEntry(entry);
+      const { count } = await execEntry(entry, { batch: true });
       total += count;
       ran++;
       if (entry.batchCleanup) await entry.batchCleanup();
@@ -1093,6 +1310,7 @@ function wireCheckers() {
       refreshFocusLocatorButton(markers);
       refreshErrorCaptureButton();
       refreshInputWatcherButton(markers);
+      refreshTablesButton(markers);
     } catch (err) {
       checkerError(err);
     } finally {
@@ -1102,6 +1320,46 @@ function wireCheckers() {
         tabSwitchedWhileRecording = false;
         refreshForActiveTab();
       }
+    }
+  });
+
+  // Tables overlay: Show runs the check and draws; Hide removes the overlay
+  // in every frame. Ask the page, not the label (popup and side panel).
+  $('toggle-tables-overlay').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    banner('');
+    try {
+      const markers = await pageMarkers();
+      if (markers.tables) {
+        await inject([...LIBS, ...TABLE_FILES], true);
+        await callChecker('tables', { action: 'hide' }, true);
+        btn.textContent = 'Show overlay';
+        announce('tables: overlay off.');
+      } else {
+        const { count, note } = await execTables(TABLES_ENTRY());
+        announce(`tables: ${count} findings (${note}); overlay on.`);
+      }
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('tables-list').addEventListener('click', (e) => {
+    const reveal = e.target.closest('.table-reveal');
+    if (reveal) revealFinding({ selector: reveal.dataset.selector, severity: reveal.dataset.severity });
+  });
+
+  $('tables-list').addEventListener('change', async (e) => {
+    const input = e.target.closest('input[type="radio"]');
+    if (!input || !input.checked) return;
+    banner('');
+    try {
+      await setTableClass(input.dataset.key, input.value);
+    } catch (err) {
+      checkerError(err);
     }
   });
 
@@ -1290,8 +1548,9 @@ function wireCheckers() {
 
   // Full reset: every artifact a checker leaves on the page (overlay layer,
   // text-spacing override stylesheet, live accname inspector, live-region log
-  // panels, focus locator, error capture, input watcher and its SW log), plus
-  // this tab's stored findings. Motion/reflow/
+  // panels, focus locator, Tables overlay, error capture, input watcher and
+  // its SW log), plus this tab's stored findings and Tables list (the saved
+  // Data / Layout choices stay). Motion/reflow/
   // hover leave nothing behind.
   $('clear-all-checkers').addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -1314,6 +1573,9 @@ function wireCheckers() {
       await inject(LOCATOR_FILES);
       await callChecker('focusLocator', 'stop');
       $('toggle-focus-locator').textContent = 'Start locator';
+      await inject([...LIBS, ...TABLE_FILES], true);
+      await callChecker('tables', { action: 'hide' }, true);
+      $('toggle-tables-overlay').textContent = 'Show overlay';
       // Error capture and the Input watcher: inject only when the page says
       // one is running.
       const running = await pageMarkers();
@@ -1428,6 +1690,7 @@ async function refreshForActiveTab() {
   for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
   $('batch-progress').textContent = '';
   renderReport({ url: tab && tab.url, tools: {} });
+  renderTables(null);
   if (restricted) return;
 
   const res = await send({ type: 'getState' });
@@ -1436,6 +1699,8 @@ async function refreshForActiveTab() {
   const store = await getStore();
   if (token !== refreshToken) return;
   renderReport(store);
+  await renderStoredTables();
+  if (token !== refreshToken) return;
   refreshTextSpacingButton();
   // One read of the page markers for every label (and a watch to resume).
   const markers = pageMarkers();
@@ -1444,6 +1709,7 @@ async function refreshForActiveTab() {
   refreshFocusLocatorButton(markers);
   refreshErrorCaptureButton();
   refreshInputWatcherButton(markers);
+  refreshTablesButton(markers);
   resumeAutoUpdate(markers);
   // Catch up on watcher entries logged while no popup was open (a
   // navigation, for example).
@@ -1525,6 +1791,10 @@ async function init() {
     chrome.storage.session.onChanged.addListener((changes) => {
       if (tab && changes[`findings:${tab.id}`] && !restricted) {
         getStore().then(renderReport);
+      }
+      const t = tab && changes[`tables:${tab.id}`];
+      if (t && !restricted && !(t.newValue && t.newValue.stamp === ownTablesStamp)) {
+        renderStoredTables();
       }
     });
   }

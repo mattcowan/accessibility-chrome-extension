@@ -150,6 +150,20 @@
       <span class="badge" id="badge-form-labels" hidden></span>
     </div>
     <div class="checker-row">
+      <input type="checkbox" class="batch-select" data-batch-id="tables"
+        title="Include in Run selected" aria-label="Include Tables in Run selected">
+      <span class="name">Tables <small>1.3.1 / TT section 14 — data or layout table, and its markup</small></span>
+      <button type="button" id="run-tables"
+        title="Find every table, guess whether it is a data table or a layout table, check its markup, and outline it on the page. Reads Chrome's table roles through the debugger (the debugging bar shows briefly).">Run</button>
+      <button type="button" id="toggle-tables-overlay" class="secondary"
+        title="Show or hide the table outlines and header colors on the page">Show overlay</button>
+      <span class="badge" id="badge-tables" hidden></span>
+    </div>
+    <div id="tables-panel" class="tables-panel" hidden>
+      <p id="tables-summary"></p>
+      <ol id="tables-list"></ol>
+    </div>
+    <div class="checker-row">
       <span class="name">Error capture <small>3.3.1 / TT 5.F, 5.G — records the errors a form shows after you submit</small></span>
       <button type="button" id="toggle-error-capture"
         title="Record what each field shows after you submit bad data: error text, how it is tied to the field, aria-invalid, announcements and color. It only watches: type and submit yourself.">Start capture</button>
@@ -200,7 +214,7 @@
     <div class="checker-row">
       <button type="button" id="clear-overlays" class="secondary">Clear overlays</button>
       <button type="button" id="clear-all-checkers" class="secondary"
-        title="Remove overlays, spacing overrides, the inspector, the focus locator, error capture and the input watcher from the page, and clear this tab's findings">
+        title="Remove overlays, spacing overrides, the inspector, the focus locator, the tables overlay, error capture and the input watcher from the page, and clear this tab's findings">
         Clear all checkers
       </button>
     </div>

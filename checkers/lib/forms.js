@@ -1,6 +1,7 @@
 // Form-field helpers shared by Form labels (1.3.1 / TT 5.C), Error capture
 // (3.3.1 / TT 5.F) and the Input watcher (3.2.2, 4.1.2 / TT 5.D, 5.E).
-// Injected (classic script) after selector.js, findings.js and accname.js.
+// Injected (classic script) after selector.js, findings.js, accname.js and
+// lib/table.js.
 //   FIELD_SELECTOR, isField(el), collectFields(root)
 //   groupMembers(el)    -> radio/checkbox inputs with the same name and form
 //   groupLabel(el)      -> {text, source} from a fieldset legend or a named
@@ -96,58 +97,18 @@ if (!globalThis.__a11yForms) {
       return null;
     }
 
-    // Grid position of each cell, so colspan and rowspan land in the right
-    // column (a small version of the HTML table model).
-    function tableGrid(table) {
-      const grid = [];
-      const pos = new Map();
-      [...table.rows].forEach((row, r) => {
-        grid[r] = grid[r] || [];
-        let c = 0;
-        for (const cell of row.cells) {
-          while (grid[r][c]) c++;
-          const rs = Math.max(1, cell.rowSpan || 1);
-          const cs = Math.max(1, cell.colSpan || 1);
-          pos.set(cell, { r, c });
-          for (let i = 0; i < rs; i++) {
-            grid[r + i] = grid[r + i] || [];
-            for (let j = 0; j < cs; j++) grid[r + i][c + j] = cell;
-          }
-          c += cs;
-        }
-      });
-      return { grid, pos };
-    }
-
+    // The header cells of the cell that holds el, from the shared table model
+    // (lib/table.js: the HTML header algorithm, ARIA tables too). A headers
+    // attribute replaces the row/column scan, as in the spec.
     function tableHeaders(el) {
-      const cell = el.closest('td, th');
-      const table = cell && cell.closest('table');
-      if (!table || table.closest('[role="presentation"], [role="none"]') === table) return null;
-      const viaHeaders = refs(cell, 'headers').map(textOf).filter(Boolean);
-      const complex = !![...table.querySelectorAll('td[rowspan], td[colspan], th[rowspan], th[colspan]')].find(
-        (c) => c.rowSpan > 1 || c.colSpan > 1
-      );
-      if (viaHeaders.length) return { row: [], col: [], viaHeaders, complex };
-      const { grid, pos } = tableGrid(table);
-      const at = pos.get(cell);
-      if (!at) return null;
-      const row = [];
-      const col = [];
-      const seen = new Set([cell]);
-      for (const other of grid[at.r] || []) {
-        if (!other || seen.has(other)) continue;
-        seen.add(other);
-        const scope = (other.getAttribute('scope') || '').toLowerCase();
-        if (other.tagName === 'TH' && scope !== 'col' && scope !== 'colgroup') row.push(textOf(other));
-      }
-      for (let r = 0; r < grid.length; r++) {
-        const other = grid[r] && grid[r][at.c];
-        if (!other || seen.has(other)) continue;
-        seen.add(other);
-        const scope = (other.getAttribute('scope') || '').toLowerCase();
-        if (other.tagName === 'TH' && scope !== 'row' && scope !== 'rowgroup') col.push(textOf(other));
-      }
-      return { row: row.filter(Boolean), col: col.filter(Boolean), viaHeaders: [], complex };
+      const T = globalThis.__a11yTable;
+      const found = T.cellOf(el);
+      if (!found || ['presentation', 'none'].includes(T.roleOf(found.table))) return null;
+      const { list, refs: idRefs } = T.headersOf(found.model, found.cell);
+      const complex = found.model.cells.some((c) => c.w > 1 || c.h > 1);
+      const names = (vias) => list.filter((h) => vias.includes(h.via)).map((h) => textOf(h.cell.el)).filter(Boolean);
+      if (idRefs.length) return { row: [], col: [], viaHeaders: names(['headers']), complex };
+      return { row: names(['row', 'rowgroup']), col: names(['col', 'colgroup']), viaHeaders: [], complex };
     }
 
     function visibleTexts(root) {

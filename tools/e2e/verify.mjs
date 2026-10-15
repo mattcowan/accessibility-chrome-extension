@@ -16,7 +16,9 @@
 // (2.1.1 / TT 4.A), the focus locator
 // (real Tab / Shift+Tab presses), and the Trusted Tester section 5 tools: form
 // labels (5.C), error capture (5.F / 5.G) and the input watcher (5.D / 5.E),
-// where the test plays the tester with real clicks, keys and selects. Older checkers (text spacing, target size, focus, hover, reflow,
+// where the test plays the tester with real clicks, keys and selects, and
+// the Tables checker (1.3.1 / TT section 14: guess, Chrome role, header
+// algorithm, overlay, the tester's saved choice). Older checkers (text spacing, target size, focus, hover, reflow,
 // accname, live regions) are not covered yet; add a section per checker.
 //
 // How it works (see CLAUDE.md "Verify changes" for the gotchas):
@@ -425,6 +427,13 @@ try {
   await env.ctx.close();
 
   // ============ #11 / #14: auto-update (2.2.2 / TT 2.C, 4.1.2 / TT 2.D) ============
+  // Wait for the page's own watch marker, not a fixed sleep: the time from
+  // the Run click to the watch start varies with machine load (fixed 500-
+  // 800 ms sleeps failed at random on 2026-10-15). true = the marker came.
+  const autoUpdateMarker = (page, value, timeout = 10000) =>
+    page
+      .waitForFunction((v) => document.documentElement.dataset.a11yAutoUpdate === v, value, { timeout })
+      .then(() => true, () => false);
   env = await launch('no-user-gesture-required');
   {
     // Watch-time field: whole seconds; empty, zero, negative and non-numeric
@@ -445,12 +454,18 @@ try {
 
     // openFixture reloads the popup, which must keep the 6.
     const { page, tabId } = await openFixture(env, 'auto-update.html', 500);
+    // The popup fills the field after its start-up refresh, so wait for it.
+    await env.popup
+      .waitForFunction(() => document.getElementById('auto-update-seconds').value === '6', null, { timeout: 5000 })
+      .catch(() => {});
     const kept = await env.popup.evaluate(() => document.getElementById('auto-update-seconds').value);
     check('[auto-update] watch time is kept across popup reloads', kept === '6', kept);
     await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
     await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
     await env.popup.click('#run-auto-update');
-    await sleep(1500);
+    await env.popup
+      .waitForFunction(() => /Watching… \d s/.test(document.getElementById('auto-update-progress').textContent), null, { timeout: 10000 })
+      .catch(() => {});
     const during = await env.popup.evaluate(() => ({
       progress: document.getElementById('auto-update-progress').textContent,
       disabled: document.getElementById('run-auto-update').disabled,
@@ -527,7 +542,7 @@ try {
     await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'setMediaFeature', feature: 'prefers-reduced-motion', value: 'reduce', tabId }), tabId);
     await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
     await env.popup.click('#run-auto-update');
-    await sleep(1000);
+    await autoUpdateMarker(page, 'watching');
     await page.keyboard.press('Shift');
     await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
     const g = await storedFindings(env, tabId, 'auto-update');
@@ -538,7 +553,7 @@ try {
     // A reload during the watch must not be reported as a clean page.
     await env.popup.evaluate(() => (document.getElementById('banner').textContent = ''));
     await env.popup.click('#run-auto-update');
-    await sleep(1000);
+    await autoUpdateMarker(page, 'watching');
     await page.reload();
     await env.popup.waitForFunction(() => !document.getElementById('run-auto-update').disabled, null, { timeout: 20000 });
     const reloaded = await env.popup.evaluate(() => document.getElementById('banner').textContent);
@@ -546,12 +561,12 @@ try {
 
     // A hidden tab during the watch gets a page note (timers slow down).
     // Playwright keeps every page visible, even behind another tab, so the
-    // test hides it for 2 s in the checker's own (isolated) world: an
-    // own-property document.hidden plus a visibilitychange event.
+    // test hides it in the checker's own (isolated) world: an own-property
+    // document.hidden plus a visibilitychange event. It hides the tab before
+    // Run, so the hidden time starts with the watch whatever the start delay,
+    // and shows it again 1.5 s after the watch starts.
     await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
     await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
-    await env.popup.click('#run-auto-update');
-    await sleep(300);
     const [swHide] = env.ctx.serviceWorkers();
     const setHidden = (hidden) =>
       swHide.evaluate(async ({ tabId, hidden }) => {
@@ -566,11 +581,13 @@ try {
         });
       }, { tabId, hidden });
     await setHidden(true);
-    await sleep(2000);
+    await env.popup.click('#run-auto-update');
+    await autoUpdateMarker(page, 'watching');
+    await sleep(1500);
     await setHidden(false);
     await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
     const hiddenNote = ((await storedFindings(env, tabId, 'auto-update')).find((x) => x.selector === '(page)') || {}).details || '';
-    check('[auto-update] a tab hidden during the watch gets a page note', /The tab was hidden for [12] of the 3 seconds/.test(hiddenNote), hiddenNote);
+    check('[auto-update] a tab hidden during the watch gets a page note', /The tab was hidden for [123] of the 3 seconds/.test(hiddenNote), hiddenNote);
 
     // exec calls only a page object's own function properties.
     const bad = await env.popup.evaluate((tabId) => chrome.runtime.sendMessage({ type: 'exec', tabId, global: '__a11yCheckers', method: 'constructor', args: [] }), tabId);
@@ -591,8 +608,7 @@ try {
     await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
     await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
     await env.popup.click('#run-auto-update');
-    await sleep(800);
-    check('[auto-update] the page marks a running watch', (await marker()) === 'watching', String(await marker()));
+    check('[auto-update] the page marks a running watch', await autoUpdateMarker(page, 'watching'), String(await marker()));
     await env.popup.goto('about:blank'); // the popup closes
     await env.popup.goto(popupUrl);
     await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
@@ -602,10 +618,9 @@ try {
     // (2) Reopened after the watch ended: collects at once.
     await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
     await env.popup.click('#run-auto-update');
-    await sleep(500);
+    await autoUpdateMarker(page, 'watching');
     await env.popup.goto('about:blank');
-    await sleep(3500);
-    check('[auto-update] the page marks a finished, uncollected watch', (await marker()) === 'done', String(await marker()));
+    check('[auto-update] the page marks a finished, uncollected watch', await autoUpdateMarker(page, 'done', 15000), String(await marker()));
     await env.popup.goto(popupUrl);
     await env.popup.waitForFunction(() => /^auto-update: \d+ findings/.test(document.getElementById('status').textContent), null, { timeout: 10000 });
     const late = await storedFindings(env, tabId, 'auto-update');
@@ -882,6 +897,161 @@ try {
     await clickAndWait(env, 'run-selected', /^Batch complete/);
     const bf = await storedFindings(env, tabId, 'form-labels');
     check('[batch] Run selected runs the form labels checker', severityFor(bf, '#contact-email', '1.3.1') === 'fail', JSON.stringify(bf.map((x) => [x.severity, x.selector])));
+    await page.close();
+  }
+
+  // ============ #27: tables (1.3.1 / TT section 14) ============
+  // data-expect = the table's finding with the tool's guess;
+  // data-expect-class = the guess; data-expect-chrome = Chrome's role;
+  // data-expect-confirmed-data / -layout = the finding after the tester's
+  // choice; data-expect-headers = a cell's headers ("|"-joined, any order).
+  {
+    const { page, tabId } = await openFixture(env, 'tables.html', 800);
+    await env.popup.evaluate(async () => {
+      const all = await chrome.storage.local.get(null);
+      await chrome.storage.local.remove(Object.keys(all).filter((k) => k.startsWith('tableClass:')));
+    });
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    const attrs = await env.popup.evaluate(async (tabId) => {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['checkers/lib/selector.js'] });
+      const [r] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({
+          tables: [...document.querySelectorAll('[data-expect-class]')].map((el) => ({
+            id: el.id,
+            sel: globalThis.__a11ySelector(el),
+            cls: el.dataset.expectClass,
+            chrome: el.dataset.expectChrome || null,
+            asData: el.dataset.expectConfirmedData || null,
+            asLayout: el.dataset.expectConfirmedLayout || null,
+          })),
+          cells: [...document.querySelectorAll('[data-expect-headers]')].map((el) => ({
+            sel: globalThis.__a11ySelector(el),
+            want: el.dataset.expectHeaders.split('|').sort().join('|'),
+          })),
+        }),
+      });
+      return r.result;
+    }, tabId);
+    const sessionTables = () => env.popup.evaluate(async (k) => ((await chrome.storage.session.get(k))[k] || {}).tables || [], `tables:${tabId}`);
+    const runTables = async () => {
+      await clickAndWait(env, 'run-tables', /^tables: \d+ findings/);
+      return storedFindings(env, tabId, 'tables');
+    };
+
+    let f = await runTables();
+    const exps = await expectations(env, tabId);
+    for (const e of exps) {
+      const got = severityFor(f, e.sel, '1.3.1');
+      check(`[tables] #${e.id} → ${e.expect}`, got === e.expect, `got ${got}; ${JSON.stringify(f.filter((x) => x.selector === e.sel).map((x) => x.details))}`);
+    }
+    let list = await sessionTables();
+    for (const t of attrs.tables) {
+      const s = list.find((x) => !x.frame && x.selector === t.sel);
+      check(`[tables] #${t.id} guessed ${t.cls}`, s && s.cls === t.cls, s ? `${s.cls}; data: ${s.signals.data.join(', ')}; layout: ${s.signals.layout.join(', ')}` : 'not in the list');
+      if (t.chrome) check(`[tables] #${t.id} Chrome role ${t.chrome}`, s && s.chrome.status === 'ok' && s.chrome.role === t.chrome, JSON.stringify(s && s.chrome));
+    }
+    check('[tables] the hidden table is not listed', !list.some((x) => x.selector === '#hidden-table'), JSON.stringify(list.map((x) => x.selector)));
+    const framed = list.find((x) => x.frame && x.selector === '#frame-noth');
+    check('[tables] the table in the iframe is listed, guessed data, Chrome not read', framed && framed.label === 'Frame T1' && framed.cls === 'data' && framed.chrome.status === 'frame', JSON.stringify(framed));
+    check('[tables] the table in the iframe gets a review (no headers)', severityFor(f, '#frame-noth', '1.3.1') === 'review', JSON.stringify(f.map((x) => [x.severity, x.selector])));
+    check('[tables] no page note when Chrome roles were read', !f.some((x) => x.selector === '(page)'), JSON.stringify(f.filter((x) => x.selector === '(page)')));
+
+    // Header association (the HTML header algorithm), read through the exec route.
+    for (const c of attrs.cells) {
+      const res = await env.popup.evaluate(
+        async ({ tabId, sel }) => chrome.runtime.sendMessage({ type: 'exec', tabId, global: '__a11yCheckers', method: 'tables', args: [{ action: 'headers', selector: sel }] }),
+        { tabId, sel: c.sel }
+      );
+      const top = res && res.ok && res.results.find((r) => r.frameId === 0);
+      const got = top && top.result ? top.result.headers.map((h) => h.text).sort().join('|') : null;
+      check(`[tables] headers of ${c.sel} = ${c.want}`, got === c.want, `got ${got}`);
+    }
+
+    // Overlay: drawn by Run, in its own layer that Clear overlays leaves alone.
+    const overlay = () =>
+      page.evaluate(() => {
+        const layer = document.getElementById('__a11y-tables');
+        if (!layer) return null;
+        const boxes = [...layer.querySelectorAll('[data-key]')];
+        return {
+          count: Number(layer.dataset.count),
+          marker: document.documentElement.dataset.a11yTables || null,
+          kinds: [...new Set([...layer.querySelectorAll('[data-kind]')].map((b) => b.dataset.kind))].sort().join(','),
+          boxes: boxes.map((b) => ({ key: b.dataset.key, cls: b.dataset.cls, confirmed: b.dataset.confirmed })),
+        };
+      });
+    const boxFor = (o, sel) => o && o.boxes.find((b) => b.key.endsWith(`|${sel}`));
+    let o = await overlay();
+    const topCount = list.filter((x) => !x.frame).length;
+    check('[tables] Run draws the overlay: one box per top-frame table, marker on', o && o.count === topCount && o.boxes.length === topCount && o.marker === 'on', JSON.stringify(o && { count: o.count, boxes: o.boxes.length, topCount, marker: o.marker }));
+    check('[tables] the overlay colors column headers, row headers and headers with neither', o && o.kinds === 'col,none,row', o && o.kinds);
+    check('[tables] the overlay box of #noth-plain says unsure', boxFor(o, '#noth-plain') && boxFor(o, '#noth-plain').cls === 'unsure', JSON.stringify(boxFor(o, '#noth-plain')));
+    check('[tables] the toggle reads Hide overlay', (await env.popup.evaluate(() => document.getElementById('toggle-tables-overlay').textContent)) === 'Hide overlay');
+    await env.popup.click('#clear-overlays');
+    await sleep(500);
+    check('[tables] Clear overlays leaves the tables overlay', !!(await overlay()));
+    const dbgState = await env.popup.evaluate(async (k) => (await chrome.storage.session.get(k))[k] || null, `tab:${tabId}`);
+    check('[tables] the debugger is detached after the read', !dbgState || !dbgState.attached, JSON.stringify(dbgState));
+
+    // The tester's choice: Data on #noth-plain, Layout on #layout-th.
+    const choose = async (sel, value) => {
+      await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+      await env.popup.click(`#tables-list input[data-key$="|${sel}"][value="${value}"]`);
+      await env.popup.waitForFunction(() => /^tables: saved/.test(document.getElementById('status').textContent), null, { timeout: 60000 });
+      return storedFindings(env, tabId, 'tables');
+    };
+    for (const t of attrs.tables.filter((x) => x.asData || x.asLayout)) {
+      const value = t.asData ? 'data' : 'layout';
+      f = await choose(t.sel, value);
+      const want = t.asData || t.asLayout;
+      check(`[tables] #${t.id} chosen as ${value} → ${want}`, severityFor(f, t.sel, '1.3.1') === want, JSON.stringify(f.filter((x) => x.selector === t.sel).map((x) => x.details)));
+    }
+    const focused = await env.popup.evaluate(() => {
+      const a = document.activeElement;
+      return a && a.type === 'radio' ? `${a.dataset.key.split('|').pop()}=${a.value}` : a && a.tagName;
+    });
+    check('[tables] focus stays on the radio button that was changed', focused === '#layout-th=layout', focused);
+    o = await overlay();
+    check('[tables] the overlay redraws with the choice', boxFor(o, '#noth-plain') && boxFor(o, '#noth-plain').cls === 'data' && boxFor(o, '#noth-plain').confirmed === 'yes', JSON.stringify(boxFor(o, '#noth-plain')));
+    const details = (f.find((x) => x.selector === '#noth-plain') || {}).details || '';
+    check('[tables] the confirmed data table names Chrome\'s LayoutTable role', /your choice/.test(details) && /LayoutTable/.test(details), details);
+
+    // The choice stays after a reload of the page and the popup.
+    await page.reload();
+    await sleep(800);
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.getElementById('report-summary'));
+    await sleep(300);
+    f = await runTables();
+    check('[tables] the choice stays after a reload', severityFor(f, '#noth-plain', '1.3.1') === 'fail', JSON.stringify(f.map((x) => [x.severity, x.selector])));
+    list = await sessionTables();
+    const kept = list.find((x) => x.selector === '#noth-plain');
+    check('[tables] the list shows the saved choice', kept && kept.confirmed === 'data' && (await env.popup.evaluate(() => document.querySelector('#tables-list input[data-key$="|#noth-plain"][value="data"]').checked)), JSON.stringify(kept));
+    f = await choose('#noth-plain', 'auto');
+    check("[tables] Tool's guess removes the choice", severityFor(f, '#noth-plain', '1.3.1') === 'review', JSON.stringify(f.filter((x) => x.selector === '#noth-plain')));
+
+    // Hide removes the overlay; a batch run scans without drawing one.
+    await clickAndWait(env, 'toggle-tables-overlay', /^tables: overlay off/);
+    o = await overlay();
+    check('[tables] Hide overlay removes the layer and the marker', !o && !(await page.evaluate(() => document.documentElement.dataset.a11yTables)), JSON.stringify(o));
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => {
+      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'tables';
+    });
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+    f = await storedFindings(env, tabId, 'tables');
+    check('[batch] Run selected runs the tables checker without an overlay', severityFor(f, '#empty-th', '1.3.1') === 'fail' && !(await overlay()), JSON.stringify(f.map((x) => [x.severity, x.selector])));
+
+    // Clear all checkers removes the overlay and the list.
+    await runTables();
+    await clickAndWait(env, 'clear-all-checkers', /^Cleared/);
+    const panelHidden = await env.popup.evaluate(() => document.getElementById('tables-panel').hidden);
+    check('[tables] Clear all checkers removes the overlay and the list', !(await overlay()) && panelHidden, String(panelHidden));
+    await env.popup.evaluate(async () => {
+      const all = await chrome.storage.local.get(null);
+      await chrome.storage.local.remove(Object.keys(all).filter((k) => k.startsWith('tableClass:')));
+    });
     await page.close();
   }
 
