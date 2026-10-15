@@ -173,7 +173,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   deliberate deviation: deciding if an auto-scope th heads its row or column ignores
   EMPTY data cells (an empty td corner must not turn the row headers off). ARIA tables
   (role table/grid/treegrid on a non-table) use row index + cell order, as Chrome does.
-  Shared by `tables.js` and `forms.js`.
+  Shared by `tables.js` and `forms.js`. `headersOf(m, cell, {wholeLine: true})` adds
+  every row header of the cell's rows and column header of its columns at ANY position
+  (`lineHeaders`; Chrome gives screen readers headers this way): the spec scan only looks
+  left/up, so a bulk-select checkbox named by the row th to its RIGHT got no header and
+  Form labels turned review into fail (peer review 2026-10-15). Use wholeLine for "does
+  it have a header" questions (forms.js, the no-header rule); the plain call is the spec
+  result (the `headers` action, E2E `data-expect-headers`). Per-model indexes (`byEl`,
+  `rowHeadsAt`/`colHeadsAt`, group-header maps) keep per-cell lookups linear: the first
+  version rebuilt them per cell (O(cells²): 2000×10 with headers attrs took 78 s).
 - `checkers/tables.js` (1.3.1 / TT section 14, registry `kind: 'tables'`, allFrames,
   batchable) — `{action: scan|show|hide|status|headers}`. `execTables` first sends
   `tableAX` (Chrome's role per top-document table), then calls the checker with
@@ -372,7 +380,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 377 checks on 2026-10-15 after the Tables checker (#27, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

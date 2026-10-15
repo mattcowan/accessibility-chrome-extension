@@ -5,8 +5,11 @@
 //   model(table)             -> {kind: 'html'|'aria', cells, slots, rows,
 //                                cols, ...} (null for an element that is not
 //                                a table)
-//   headersOf(model, cell)   -> {list: [{cell, via}], refs: [...]} the header
-//                                cells of one cell (see below)
+//   headersOf(model, cell, {wholeLine})
+//                            -> {list: [{cell, via}], refs: [...]} the header
+//                                cells of one cell (see below); wholeLine adds
+//                                every row/column header of the cell's lines
+//   lineHeaders(model, cell) -> those row/column headers only
 //   cellOf(el)               -> {table, model, cell} for the cell holding el
 //   isEmpty(el), textOf(el)
 //
@@ -151,7 +154,43 @@ if (!globalThis.__a11yTable) {
       const cols = slots.reduce((n, r) => Math.max(n, r ? r.length : 0), 0);
       const model = { kind: 'html', table, cells, slots, rows, cols, rowGroups, colGroups, truncated };
       classifyHeaders(model);
+      return indexModel(model);
+    }
+
+    // Lookups built once per model, so per-cell header queries stay linear in
+    // the table size: element -> cell, the row headers covering each row, the
+    // column headers covering each column, and the row/column group headers.
+    function indexModel(model) {
+      model.byEl = new Map(model.cells.map((c) => [c.el, c]));
+      model.rowHeadsAt = [];
+      model.colHeadsAt = [];
+      model.rowGroupHeads = new Map();
+      model.colGroupHeads = new Map();
+      const push = (map, key, c) => (map.get(key) || map.set(key, []).get(key)).push(c);
+      for (const c of model.cells) {
+        if (!c.header) continue;
+        if (c.rowHeader) for (let y = c.y; y < c.y + c.h; y++) (model.rowHeadsAt[y] = model.rowHeadsAt[y] || []).push(c);
+        if (c.colHeader) for (let x = c.x; x < c.x + c.w; x++) (model.colHeadsAt[x] = model.colHeadsAt[x] || []).push(c);
+        if (c.rowGroupHeader) push(model.rowGroupHeads, c.rowGroup, c);
+        if (c.colGroupHeader && c.colGroup !== -1) push(model.colGroupHeads, c.colGroup, c);
+      }
       return model;
+    }
+
+    // Every row header in the cell's rows and every column header in its
+    // columns, at any position. Chrome gives screen readers a cell's headers
+    // this way (all rowheader cells of the row, all columnheader cells of the
+    // column), so a row header to the RIGHT of a checkbox cell still names
+    // it, which the spec's leftward scan misses.
+    function lineHeaders(model, cell) {
+      const out = [];
+      for (let y = cell.y; y < cell.y + cell.h; y++) {
+        for (const c of model.rowHeadsAt[y] || []) if (c !== cell) out.push({ cell: c, via: 'row' });
+      }
+      for (let x = cell.x; x < cell.x + cell.w; x++) {
+        for (const c of model.colHeadsAt[x] || []) if (c !== cell) out.push({ cell: c, via: 'col' });
+      }
+      return out;
     }
 
     // Column / row header per the spec, with empty data cells not counted
@@ -222,10 +261,9 @@ if (!globalThis.__a11yTable) {
       const attr = cell.el.getAttribute('headers');
       if (attr !== null && attr.trim()) {
         const root = cell.el.getRootNode();
-        const byEl = new Map(model.cells.map((c) => [c.el, c]));
         for (const id of attr.trim().split(/\s+/)) {
           const target = root.getElementById ? root.getElementById(id) : null;
-          const hit = target && byEl.get(target);
+          const hit = target && model.byEl.get(target);
           let problem = null;
           if (!target) problem = 'missing';
           else if (!hit) problem = 'outside';
@@ -239,11 +277,13 @@ if (!globalThis.__a11yTable) {
         for (let x = cell.x; x < cell.x + cell.w; x++) scan(model, cell, x, cell.y, 0, -1, list);
         const right = cell.x + cell.w - 1;
         const bottom = cell.y + cell.h - 1;
-        for (const c of model.cells) {
-          if (c === cell || c.x > right || c.y > bottom) continue;
-          if (c.rowGroupHeader && c.rowGroup === cell.rowGroup) list.push({ cell: c, via: 'rowgroup' });
-          if (c.colGroupHeader && c.colGroup !== -1 && c.colGroup === cell.colGroup) {
-            list.push({ cell: c, via: 'colgroup' });
+        const inReach = (c) => c !== cell && c.x <= right && c.y <= bottom;
+        for (const c of model.rowGroupHeads.get(cell.rowGroup) || []) {
+          if (inReach(c)) list.push({ cell: c, via: 'rowgroup' });
+        }
+        if (cell.colGroup !== -1) {
+          for (const c of model.colGroupHeads.get(cell.colGroup) || []) {
+            if (inReach(c)) list.push({ cell: c, via: 'colgroup' });
           }
         }
       }
@@ -313,7 +353,7 @@ if (!globalThis.__a11yTable) {
       for (let y = 0; y < rowEls.length; y++) slots[y] = slots[y] || [];
       const cols = slots.reduce((n, r) => Math.max(n, r.length), 0);
       const emptyRows = rowEls.filter((r, i) => !slots[i].length);
-      return {
+      return indexModel({
         kind: 'aria',
         table,
         cells,
@@ -326,17 +366,12 @@ if (!globalThis.__a11yTable) {
         orphans,
         emptyRows,
         truncated: false,
-      };
+      });
     }
 
+    // An ARIA table's headers are its line headers, as Chrome computes them.
     function ariaHeaders(model, cell) {
-      const list = [];
-      for (const c of model.slots[cell.y] || []) if (c !== cell && c.rowHeader) list.push({ cell: c, via: 'row' });
-      for (const row of model.slots) {
-        const c = row[cell.x];
-        if (c && c !== cell && c.colHeader) list.push({ cell: c, via: 'col' });
-      }
-      return { list: list.filter((h) => textOf(h.cell.el)), refs: [] };
+      return { list: lineHeaders(model, cell).filter((h) => textOf(h.cell.el)), refs: [] };
     }
 
     // ---------------------------------------------------------------- public
@@ -347,8 +382,21 @@ if (!globalThis.__a11yTable) {
       return ARIA_TABLE_ROLES.has(roleOf(table)) ? ariaModel(table) : null;
     }
 
-    function headersOf(m, cell) {
-      return m.kind === 'html' ? htmlHeaders(m, cell) : ariaHeaders(m, cell);
+    // opts.wholeLine: also every non-empty row header of the cell's rows and
+    // column header of its columns (what Chrome gives screen readers), when
+    // the cell has no headers attribute. Use it to ask "does this cell have a
+    // header at all"; without it the result is the spec algorithm's.
+    function headersOf(m, cell, opts = {}) {
+      const out = m.kind === 'html' ? htmlHeaders(m, cell) : ariaHeaders(m, cell);
+      if (!opts.wholeLine || out.refs.length) return out;
+      const seen = new Set(out.list.map((h) => h.cell));
+      for (const h of lineHeaders(m, cell)) {
+        if (!seen.has(h.cell) && !isEmpty(h.cell.el)) {
+          seen.add(h.cell);
+          out.list.push(h);
+        }
+      }
+      return out;
     }
 
     // The cell (td/th or ARIA cell) that holds el, with its table's model.
@@ -361,6 +409,6 @@ if (!globalThis.__a11yTable) {
       return cell ? { table, model: m, cell } : null;
     }
 
-    return { SELECTOR, collect, model, headersOf, cellOf, isEmpty, textOf, roleOf, isTool, ownerTable };
+    return { SELECTOR, collect, model, headersOf, lineHeaders, cellOf, isEmpty, textOf, roleOf, isTool, ownerTable };
   })();
 }

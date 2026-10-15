@@ -99,12 +99,15 @@ if (!globalThis.__a11yForms) {
 
     // The header cells of the cell that holds el, from the shared table model
     // (lib/table.js: the HTML header algorithm, ARIA tables too). A headers
-    // attribute replaces the row/column scan, as in the spec.
+    // attribute replaces the row/column scan, as in the spec. wholeLine adds
+    // every row and column header of the cell's lines, as Chrome gives them to
+    // screen readers: a bulk-select checkbox is named by the row header to
+    // its RIGHT, which the spec's leftward scan does not reach.
     function tableHeaders(el) {
       const T = globalThis.__a11yTable;
       const found = T.cellOf(el);
       if (!found || ['presentation', 'none'].includes(T.roleOf(found.table))) return null;
-      const { list, refs: idRefs } = T.headersOf(found.model, found.cell);
+      const { list, refs: idRefs } = T.headersOf(found.model, found.cell, { wholeLine: true });
       const complex = found.model.cells.some((c) => c.w > 1 || c.h > 1);
       const names = (vias) => list.filter((h) => vias.includes(h.via)).map((h) => textOf(h.cell.el)).filter(Boolean);
       if (idRefs.length) return { row: [], col: [], viaHeaders: names(['headers']), complex };

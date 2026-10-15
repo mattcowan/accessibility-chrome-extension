@@ -42,6 +42,24 @@ if (!globalThis.__a11yTablesChecker) {
 
     const isTop = window === window.top;
     const pageKey = () => location.origin + location.pathname + location.search;
+
+    // This frame's position in the page, 1-based per level ("2", "1.3"), so
+    // two frames never share a label. window.frames can be indexed and
+    // compared across origins, so this works under cross-origin parents too.
+    function framePath() {
+      const parts = [];
+      try {
+        for (let w = window; w !== w.top; w = w.parent) {
+          const siblings = w.parent.frames;
+          let i = 0;
+          while (i < siblings.length && siblings[i] !== w) i++;
+          parts.unshift(i < siblings.length ? i + 1 : '?');
+        }
+      } catch {
+        return '?';
+      }
+      return parts.join('.');
+    }
     const quote = (s, n = 40) => `"${s.length > n ? `${s.slice(0, n - 3)}...` : s}"`;
     const at = (c) => `row ${c.y + 1}, column ${c.x + 1}`;
     const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -242,11 +260,35 @@ if (!globalThis.__a11yTablesChecker) {
       return t ? ` ${quote(t)}` : '';
     };
 
+    // Does header cell c head a non-empty data cell: one in its columns (as a
+    // column header) or in its rows (as a row header)? Whole lines, as Chrome
+    // assigns headers.
+    function headsData(m, c) {
+      const data = (d) => d && d !== c && !d.header && !T.isEmpty(d.el);
+      if (c.colHeader || c.colGroupHeader) {
+        for (let y = 0; y < m.rows; y++) {
+          for (let x = c.x; x < c.x + c.w; x++) if (data(m.slots[y] && m.slots[y][x])) return true;
+        }
+      }
+      if (c.rowHeader || c.rowGroupHeader) {
+        for (let y = c.y; y < c.y + c.h; y++) {
+          for (const d of m.slots[y] || []) if (data(d)) return true;
+        }
+      }
+      return false;
+    }
+
+    const headsNothing = (c) => !c.colHeader && !c.rowHeader && !c.colGroupHeader && !c.rowGroupHeader;
+
     // Markup errors in a table that is treated as data (or not decided yet).
     function markupIssues(table, m, mk, add) {
       const emptyHeads = mk.headers.filter((c) => !hasName(c.el));
-      const corner = emptyHeads.filter((c) => c.x === 0 && c.y === 0);
-      const empty = emptyHeads.filter((c) => !(c.x === 0 && c.y === 0));
+      // An empty top-left header is harmless only when it heads no data (its
+      // column and row hold header cells); over td data it is an empty
+      // heading like any other.
+      const isCorner = (c) => c.x === 0 && c.y === 0 && !headsData(m, c);
+      const corner = emptyHeads.filter(isCorner);
+      const empty = emptyHeads.filter((c) => !isCorner(c));
       if (empty.length) {
         add(
           'fail',
@@ -287,11 +329,16 @@ if (!globalThis.__a11yTablesChecker) {
       const badScope = [...table.querySelectorAll('th[scope]')].filter(
         (el) => T.ownerTable(el) === table && !['row', 'col', 'rowgroup', 'colgroup'].includes(el.getAttribute('scope').trim().toLowerCase())
       );
+      // The browser reads a scope value that is not valid as no scope, so the
+      // th still heads its row or column by position: warn. Never fail: Chrome
+      // gives such a th the same role as with no scope (a column-0 th is a
+      // rowheader even where the spec's auto rule heads nothing; verified
+      // 2026-10-15), and the "heads no row or column" review covers the spec.
       if (badScope.length) {
         add(
-          'fail',
+          'warn',
           `${plural(badScope.length, 'th has', 'th cells have')} a scope value that is not valid (first: scope="${badScope[0].getAttribute('scope')}"${firstText({ el: badScope[0] })}). ` +
-            'A screen reader ignores it. Use row, col, rowgroup or colgroup.'
+            'The browser ignores it and uses the position of the cell instead. Check that the headers are still right, and use row, col, rowgroup or colgroup.'
         );
       }
       const tdScope = mk.scoped.filter((el) => el.tagName === 'TD');
@@ -350,7 +397,7 @@ if (!globalThis.__a11yTablesChecker) {
             'Screen readers can read the wrong headers for such a table. Add scope (col, row, colgroup, rowgroup) or headers and id, then check the headers of each data cell.'
         );
       }
-      const lost = heads.filter((c) => !c.colHeader && !c.rowHeader && !c.colGroupHeader && !c.rowGroupHeader && hasName(c.el));
+      const lost = heads.filter((c) => headsNothing(c) && hasName(c.el));
       if (m.kind === 'html' && lost.length) {
         add(
           'review',
@@ -359,7 +406,11 @@ if (!globalThis.__a11yTablesChecker) {
         );
       }
       if (heads.length) {
-        const orphanData = m.cells.filter((c) => !c.header && !T.isEmpty(c.el) && T.textOf(c.el) && !T.headersOf(m, c).list.length);
+        // Whole lines count (a row header to the right of a checkbox cell
+        // names it for screen readers). The line check is a quick index
+        // lookup; the full algorithm runs only when it finds nothing.
+        const named = (c) => T.lineHeaders(m, c).some((h) => !T.isEmpty(h.cell.el)) || T.headersOf(m, c, { wholeLine: true }).list.length > 0;
+        const orphanData = m.cells.filter((c) => !c.header && !T.isEmpty(c.el) && T.textOf(c.el) && !named(c));
         if (orphanData.length) {
           const listed = orphanData.slice(0, MAX_LISTED).map((c) => `${at(c)}${firstText(c)}`).join('; ');
           add(
@@ -486,7 +537,7 @@ if (!globalThis.__a11yTablesChecker) {
         }
         if (m.truncated) add('review', 'The table is very large; only its first part was checked.');
 
-        const label = `${isTop ? '' : 'Frame '}T${i + 1}`;
+        const label = `${isTop ? '' : `Frame ${framePath()} `}T${i + 1}`;
         const severity = issues.reduce((s, x) => (!s || RANK[x.severity] > RANK[s] ? x.severity : s), null);
         const name =
           cls === 'unsure'

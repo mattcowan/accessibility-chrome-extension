@@ -15,7 +15,7 @@
 //    row and column associations as cues). Headers are context, not part of
 //    the name.
 // It only reads the DOM: it never types into, focuses or submits the form.
-// Needs selector.js, findings.js, accname.js and lib/forms.js.
+// Needs selector.js, findings.js, accname.js, lib/table.js and lib/forms.js.
 if (!globalThis.__a11yFormLabels) {
   globalThis.__a11yFormLabels = true;
 

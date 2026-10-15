@@ -952,8 +952,10 @@ try {
       if (t.chrome) check(`[tables] #${t.id} Chrome role ${t.chrome}`, s && s.chrome.status === 'ok' && s.chrome.role === t.chrome, JSON.stringify(s && s.chrome));
     }
     check('[tables] the hidden table is not listed', !list.some((x) => x.selector === '#hidden-table'), JSON.stringify(list.map((x) => x.selector)));
-    const framed = list.find((x) => x.frame && x.selector === '#frame-noth');
-    check('[tables] the table in the iframe is listed, guessed data, Chrome not read', framed && framed.label === 'Frame T1' && framed.cls === 'data' && framed.chrome.status === 'frame', JSON.stringify(framed));
+    const framed = list.find((x) => x.frame && x.selector === '#frame-noth' && x.label === 'Frame 1 T1');
+    check('[tables] the table in the iframe is listed, guessed data, Chrome not read', framed && framed.cls === 'data' && framed.chrome.status === 'frame', JSON.stringify(list.filter((x) => x.frame)));
+    const labels = list.map((x) => x.label);
+    check('[tables] a second iframe gets its own label, and no two labels are the same', labels.includes('Frame 2 T1') && new Set(labels).size === labels.length, JSON.stringify(labels));
     check('[tables] the table in the iframe gets a review (no headers)', severityFor(f, '#frame-noth', '1.3.1') === 'review', JSON.stringify(f.map((x) => [x.severity, x.selector])));
     check('[tables] no page note when Chrome roles were read', !f.some((x) => x.selector === '(page)'), JSON.stringify(f.filter((x) => x.selector === '(page)')));
 

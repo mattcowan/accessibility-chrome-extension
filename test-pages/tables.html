@@ -157,6 +157,15 @@
   </div>
 
   <div class="test-section">
+    <h2>(k2) Empty top-left header cell over td data (it is the heading of "Apple")</h2>
+    <table id="corner-th-over-data" class="bordered" data-expect="fail" data-expect-class="data">
+      <tr><th></th><th scope="col">Price</th></tr>
+      <tr><td>Apple</td><td>1.00</td></tr>
+      <tr><td>Pear</td><td>1.20</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
     <h2>(l) headers attribute: a missing id, and an id of a td</h2>
     <table id="bad-headers" class="bordered" data-expect="fail" data-expect-class="data">
       <tr><th id="bh-name">Name</th><th id="bh-age">Age</th></tr>
@@ -166,11 +175,23 @@
   </div>
 
   <div class="test-section">
-    <h2>(m) scope value that is not valid</h2>
-    <table id="bad-scope" class="bordered" data-expect="fail" data-expect-class="data">
+    <h2>(m) scope value that is not valid; by position the th still heads its column</h2>
+    <table id="bad-scope" class="bordered" data-expect="warn" data-expect-class="data">
       <tr><th scope="column">Name</th><th scope="col">Age</th></tr>
-      <tr><td>Ann</td><td>30</td></tr>
-      <tr><td>Bob</td><td>40</td></tr>
+      <tr><td>Ann</td><td data-expect-headers="Age">30</td></tr>
+      <tr><td data-expect-headers="Name">Bob</td><td>40</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(m2) scope value that is not valid, and by the spec's position rule the th heads nothing</h2>
+    <!-- warn, not fail: Chrome treats the invalid value as no scope and still
+         exposes "Total" as a rowheader. The "heads no row or column" review
+         reports the spec part. -->
+    <table id="bad-scope-lost" class="bordered" data-expect="warn" data-expect-class="data">
+      <tr><th scope="col">Item</th><th scope="col">Price</th></tr>
+      <tr><td>Pen</td><td>1.20</td></tr>
+      <tr><th scope="rows">Total</th><td>1.20</td></tr>
     </table>
   </div>
 
@@ -315,8 +336,20 @@
   </div>
 
   <div class="test-section">
-    <h2>(aa) Table in a same-origin iframe</h2>
+    <h2>(ab) Row header to the right of a data cell</h2>
+    <!-- The spec's leftward scan gives "3 May" no header; Chrome gives it the
+         row header to its right, so it is not "a data cell with no header". -->
+    <table id="row-header-right" class="bordered" data-expect="pass" data-expect-class="data">
+      <tr><td>3 May</td><th scope="row">Invoice 1001</th><td>20.00</td></tr>
+      <tr><td>4 May</td><th scope="row">Invoice 1002</th><td>35.50</td></tr>
+      <tr><td>9 May</td><th scope="row">Invoice 1003</th><td>12.25</td></tr>
+    </table>
+  </div>
+
+  <div class="test-section">
+    <h2>(aa) Tables in two same-origin iframes (labels must differ)</h2>
     <iframe id="tables-frame" src="tables-frame.html" title="Table in a frame" width="420" height="160"></iframe>
+    <iframe id="tables-frame-2" src="tables-frame.html?copy=2" title="Table in a second frame" width="420" height="160"></iframe>
   </div>
 </body>
 </html>

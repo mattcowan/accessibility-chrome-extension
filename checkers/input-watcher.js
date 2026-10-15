@@ -5,8 +5,8 @@
 //   __a11yCheckers.inputWatcher('stop')   -> {active:false, events}  (removes
 //       everything; events = what an open window saw, for the SW's log)
 //   __a11yCheckers.inputWatcher('status') -> {active}
-// Needs selector.js, findings.js, accname.js, lib/forms.js and lib/live.js.
-// Top frame only.
+// Needs selector.js, findings.js, accname.js, lib/table.js, lib/forms.js and
+// lib/live.js. Top frame only.
 //
 // It only watches: it never types, selects, clicks or submits, and it never
 // attaches the debugger.
