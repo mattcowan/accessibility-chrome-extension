@@ -182,6 +182,11 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   result (the `headers` action, E2E `data-expect-headers`). Per-model indexes (`byEl`,
   `rowHeadsAt`/`colHeadsAt`, group-header maps) keep per-cell lookups linear: the first
   version rebuilt them per cell (O(cells²): 2000×10 with headers attrs took 78 s).
+  `cellOf(el, cache)` takes a Map the CALLER owns for one run (Form labels makes one per
+  `formLabels()` call; never a long-lived cache — the stateful tools would read stale
+  models). A cell past the MAX_SLOTS cap returns `{cell: null, truncated: true}`, and
+  forms.js reports it as `unknown`: Form labels then gives `review`, never `fail`
+  (PR #28 review: a bulk-select group past the cap read as "not in a table" → fail).
 - `checkers/tables.js` (1.3.1 / TT section 14, registry `kind: 'tables'`, allFrames,
   batchable) — `{action: scan|show|hide|status|headers}`. `execTables` first sends
   `tableAX` (Chrome's role per top-document table), then calls the checker with

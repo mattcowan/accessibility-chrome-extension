@@ -6,7 +6,8 @@
 //   groupMembers(el)    -> radio/checkbox inputs with the same name and form
 //   groupLabel(el)      -> {text, source} from a fieldset legend or a named
 //                          group/radiogroup that holds every member, or null
-//   tableHeaders(el)    -> {row, col, viaHeaders, complex} for a field in a cell
+//   tableHeaders(el, cache) -> {row, col, viaHeaders, complex, unknown} for a
+//                          field in a cell (unknown: table too large to read)
 //   nearbyTexts(el)     -> visible text runs around the field (its own
 //                          container, or its neighbors up to the next field)
 //   visibleTexts(root)  -> visible text runs under root
@@ -103,10 +104,14 @@ if (!globalThis.__a11yForms) {
     // every row and column header of the cell's lines, as Chrome gives them to
     // screen readers: a bulk-select checkbox is named by the row header to
     // its RIGHT, which the spec's leftward scan does not reach.
-    function tableHeaders(el) {
+    // cache: an optional Map the caller owns for one run (see cellOf).
+    // unknown: true when the cell is past the table model's size cap, so its
+    // headers were not read; a caller must not treat that as "no headers".
+    function tableHeaders(el, cache) {
       const T = globalThis.__a11yTable;
-      const found = T.cellOf(el);
+      const found = T.cellOf(el, cache);
       if (!found || ['presentation', 'none'].includes(T.roleOf(found.table))) return null;
+      if (!found.cell) return { row: [], col: [], viaHeaders: [], complex: true, unknown: true };
       const { list, refs: idRefs } = T.headersOf(found.model, found.cell, { wholeLine: true });
       const complex = found.model.cells.some((c) => c.w > 1 || c.h > 1);
       const names = (vias) => list.filter((h) => vias.includes(h.via)).map((h) => textOf(h.cell.el)).filter(Boolean);

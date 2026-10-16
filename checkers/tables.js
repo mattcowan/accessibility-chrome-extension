@@ -713,7 +713,7 @@ if (!globalThis.__a11yTablesChecker) {
       if (typeof selector !== 'string' || !selector) return null;
       const el = globalThis.__a11yResolve(selector);
       const found = el && T.cellOf(el);
-      if (!found) return null;
+      if (!found || !found.cell) return null;
       const { list } = T.headersOf(found.model, found.cell);
       return { headers: list.map((h) => ({ text: T.textOf(h.cell.el), via: h.via })) };
     }

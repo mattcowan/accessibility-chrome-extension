@@ -385,11 +385,16 @@ export async function clickListenerPaths(tabId) {
 
 const TABLE_GROUP = 'a11y-table-roles';
 const TABLE_CAP = 300;
+// The role filter is the page checker's (table.js roleOf): only the FIRST
+// role token counts, so role="presentation table" is not listed. This is
+// code inside a template literal, so the regex backslash is doubled.
 const TABLE_LIST_EXPR = `(() => {
   const out = [];
   const sel = 'table, [role~="table"], [role~="grid"], [role~="treegrid"]';
+  const roles = ['table', 'grid', 'treegrid'];
+  const first = (el) => (el.getAttribute('role') || '').trim().toLowerCase().split(/\\s+/)[0];
   const walk = (root) => {
-    for (const el of root.querySelectorAll(sel)) out.push(el);
+    for (const el of root.querySelectorAll(sel)) if (el.tagName === 'TABLE' || roles.includes(first(el))) out.push(el);
     for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot);
   };
   walk(document);

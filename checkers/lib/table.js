@@ -10,7 +10,8 @@
 //                                cells of one cell (see below); wholeLine adds
 //                                every row/column header of the cell's lines
 //   lineHeaders(model, cell) -> those row/column headers only
-//   cellOf(el)               -> {table, model, cell} for the cell holding el
+//   cellOf(el, cache)        -> {table, model, cell} for the cell holding el
+//                                (cell null + truncated: past the size cap)
 //   isEmpty(el), textOf(el)
 //
 // HTML tables follow the HTML table model ("forming a table") and the HTML
@@ -400,13 +401,25 @@ if (!globalThis.__a11yTable) {
     }
 
     // The cell (td/th or ARIA cell) that holds el, with its table's model.
-    function cellOf(el) {
+    // cache: an optional Map (table -> model) that the CALLER owns for one
+    // run, so N fields in one table build its model once. Do not keep one
+    // longer: the stateful tools would read a stale model.
+    // A cell past the MAX_SLOTS cap is not in the model: that returns
+    // {table, model, cell: null, truncated: true}, never null, so a caller
+    // can tell "headers unknown" from "not in a table".
+    function cellOf(el, cache) {
       const cellEl = el.closest('td, th, [role~="cell"], [role~="gridcell"], [role~="columnheader"], [role~="rowheader"]');
       if (!cellEl) return null;
       const table = cellEl.tagName === 'TD' || cellEl.tagName === 'TH' ? cellEl.closest('table') : ownerTable(cellEl);
-      const m = model(table);
-      const cell = m && m.cells.find((c) => c.el === cellEl);
-      return cell ? { table, model: m, cell } : null;
+      let m = cache && cache.get(table);
+      if (!m) {
+        m = model(table);
+        if (cache && m) cache.set(table, m);
+      }
+      if (!m) return null;
+      const cell = m.byEl.get(cellEl);
+      if (cell) return { table, model: m, cell };
+      return m.truncated ? { table, model: m, cell: null, truncated: true } : null;
     }
 
     return { SELECTOR, collect, model, headersOf, lineHeaders, cellOf, isEmpty, textOf, roleOf, isTool, ownerTable };

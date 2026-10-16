@@ -58,9 +58,18 @@ if (!globalThis.__a11yFormLabels) {
       return [...new Set(parts.filter(Boolean))].join(' ');
     }
 
+    // Table models for one formLabels() run (one build per table, not per
+    // field); dropped at the end of the run.
+    let tableCache = null;
+
     function contextOf(el) {
       const parts = [];
-      const h = Fo.tableHeaders(el);
+      const h = Fo.tableHeaders(el, tableCache);
+      if (h && h.unknown) {
+        // Past the table model's size cap: the headers were not read, which
+        // is not the same as "no headers" (that must never become a fail).
+        return { text: 'table headers not read (the table is too large)', complex: true, unknown: true };
+      }
       if (h) {
         if (h.viaHeaders.length) parts.push(`headers attribute ${h.viaHeaders.map((t) => quote(t, 40)).join(', ')}`);
         if (h.row.length) parts.push(`row header ${h.row.map((t) => quote(t, 40)).join(', ')}`);
@@ -79,6 +88,15 @@ if (!globalThis.__a11yFormLabels) {
     }
 
     function formLabels() {
+      tableCache = new Map();
+      try {
+        return run();
+      } finally {
+        tableCache = null;
+      }
+    }
+
+    function run() {
       const results = new Map(); // element -> {severity, parts[]}
       const add = (el, severity, text) => {
         const cur = results.get(el) || { severity, parts: [] };
@@ -113,12 +131,15 @@ if (!globalThis.__a11yFormLabels) {
           // accepts table associations), or a member name built from two or
           // more elements (aria-labelledby="question option"). Those are
           // `review`, not `fail` (decided 2026-10-08 after review).
-          const headers = members.map((m) => contextOf(m)).filter((c) => /header/.test(c.text));
+          const contexts = members.map((m) => contextOf(m));
+          const headers = contexts.filter((c) => !c.unknown && /header/.test(c.text));
           const inTable = headers.length === members.length;
+          const unread = contexts.some((c) => c.unknown);
           const joined = members.find((m) => Fo.refs(m, 'aria-labelledby').length >= 2);
           const why = [];
           if (described.length) why.push(`A member has aria-describedby (${quote(described[0])}).`);
           if (inTable) why.push(`Every member is in a table cell with headers (first: ${headers[0].text}).`);
+          if (unread) why.push('A member is in a table too large for the checker to read its headers, so table headers may name the options.');
           if (joined) why.push(`A member's aria-labelledby joins more than one element (${quote(A.compute(joined).name)}).`);
           if (why.length) {
             add(
