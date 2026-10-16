@@ -202,6 +202,33 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   that is on). The popup keeps the last list in session `tables:${tabId}` (with a
   `stamp`, so the side panel re-renders a list the popup stored but not its own — that
   would drop focus from the radio just changed).
+- `checkers/css-position.js` (1.3.2 / TT 15.B, registry `kind: 'css-position'`,
+  allFrames, batchable, #29) — `{action: scan|show|hide|linearize|status}`. Moved =
+  absolute/fixed, relative with a used offset ≥1px, float; reordering container =
+  flex `-reverse`/`wrap-reverse`, or in-flow items with `order` or explicit grid
+  placement (C27 — ANDI's linearize misses these). Content = text runs plus named
+  images/fields/media in flat-tree order; a moved element with none, or visually
+  hidden (clip, `inset(50%)`, 1×1 clipping box, outside the document), is skipped
+  and its content is never used as a neighbor. A moved element is compared with
+  its nearest seen neighbors outside its subtree (prev's LAST line vs its first,
+  its last vs next's FIRST: above/below wins, then the inline direction, RTL
+  aware; overlap = "covers"); a container compares its items pairwise by FIRST
+  line only (a tall grid item beside short ones must not read as "after") and
+  gives ONE finding. Fixed (decided by Matt 2026-10-16): center in the top half of
+  the window → its rects are shifted by −scroll and compared as at scroll 0 (a
+  header coded last); lower → no order check, `review` only when it holds a visible
+  control (`pinned`), else outline only; content inside a fixed element is never a
+  neighbor. Always `review`. Why not trust ANDI: Chrome returns used px,
+  never `auto`, for top/left/bottom/right on relative/absolute/fixed elements with
+  no offset (verified 2026-10-16, Chromium 149), so ANDI's offset filter marks
+  every one of them; and its glow is a box-shadow on the element's own box, which a
+  zero-height wrapper or an `overflow:hidden` ancestor hides. The overlay
+  (`#__a11y-css-position`, marker `data-a11y-css-position`, NOT cleared by Clear
+  overlays) outlines the union of the element and its content, re-measured at each
+  draw; badges = reading-order number, placed left of the outline. Linearize
+  (marker `data-a11y-linearize`) sets inline `!important` (beats the page's own
+  inline `!important`) and restores the saved inline values newest-first; a scan
+  while linearized undoes it, measures, and re-applies; hide ends it.
 - `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
   batchable) — group with no group label is `fail`, `review` when a member has
   aria-describedby, every member has table headers (bulk select), or a member's
@@ -385,7 +412,13 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). The default run skips
+  the audio checker / Reload and record sections and launches every browser with
+  `--mute-audio` (Matt may be on a call); `--audio` runs only the audio sections,
+  with sound, and `--all` runs both. The `[#15]` activation guard stays in the
+  default run: it reads `hasBeenActive` and `play()` rejection, which muting does
+  not change. Run `--audio` only when Matt says sound is OK, and before handing
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 370 checks in the default (muted) run on 2026-10-16 after CSS positioning (#29, +34); `--all` should be 421, not yet run (the audio sections were last run in the 387-check run). 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
@@ -398,7 +431,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   labels, error capture, input watcher — the test plays the tester with real
   clicks/keys/selects); older checkers have no section yet — **extend it with each new checker**
   (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
-  `data-expect-blocked`, `data-expect-recorded`): launch twice, with
+  `data-expect-blocked`, `data-expect-recorded`; `--audio`/`--all` only): launch twice, with
   `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
   (Playwright sets no autoplay flag by default). Under Playwright,
   `chrome.debugger.getTargets()` always reports `attached: true` (Playwright's own

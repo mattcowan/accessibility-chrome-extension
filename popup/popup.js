@@ -31,6 +31,7 @@ const LIVE_FILES = [...LIBS, LIVE, 'checkers/live-regions.js'];
 // Table model (HTML header algorithm), shared by Tables and the form tools.
 const TABLE_LIB = 'checkers/lib/table.js';
 const TABLE_FILES = ['checkers/lib/resolve.js', TABLE_LIB, 'checkers/tables.js'];
+const CSS_POSITION_FILES = ['checkers/css-position.js'];
 // Form-field helpers (group labels, table headers, nearby text) for the three
 // Trusted Tester section 5 tools.
 const FORMS = ['checkers/lib/accname.js', TABLE_LIB, 'checkers/lib/forms.js'];
@@ -299,6 +300,7 @@ const BADGE_BY_TOOL = {
   'keyboard-access': 'badge-keyboard-access',
   'form-labels': 'badge-form-labels',
   tables: 'badge-tables',
+  'css-position': 'badge-css-position',
   'error-capture': 'badge-error-capture',
   'input-watcher': 'badge-input-watcher',
   'target-size': 'badge-target-size',
@@ -634,6 +636,10 @@ const CHECKERS = [
     batchDefault: true },
   { id: 'tables', tool: 'tables', buttonId: 'run-tables', kind: 'tables',
     files: TABLE_FILES,
+    batchDefault: true },
+  // Reads layout, so it runs before text-spacing applies its overrides.
+  { id: 'css-position', tool: 'css-position', buttonId: 'run-css-position', kind: 'css-position',
+    files: CSS_POSITION_FILES,
     batchDefault: true },
   { id: 'target-size', tool: 'target-size', buttonId: 'run-target-size', kind: 'simple',
     files: [OVERLAY, 'checkers/target-size.js'], fnName: 'targetSize', allFrames: true,
@@ -1087,12 +1093,46 @@ async function refreshTablesButton(markers = pageMarkers()) {
   }
 }
 
+// ---------------------------------------------------------- CSS positioning
+
+// CSS positioning (1.3.2 / TT 15.B). Run draws the overlay (own layer, marker
+// data-a11y-css-position, not removed by Clear overlays); a batch run only
+// scans, and redraws an overlay that is on. Linearize is page-side state
+// (marker data-a11y-linearize); every frame runs it.
+async function execCssPosition(entry, { draw = true } = {}) {
+  await inject([...LIBS, ...entry.files], true);
+  const results = await callChecker('cssPosition', { action: draw ? 'show' : 'scan' }, true);
+  let moved = 0;
+  let changed = 0;
+  const findings = [];
+  for (const r of results) {
+    if (!r.result) continue;
+    moved += r.result.items.length;
+    changed += r.result.items.filter((i) => i.order === 'changed').length;
+    findings.push(...r.result.findings);
+  }
+  const stored = await storeToolFindings('css-position', findings);
+  if (draw) $('toggle-css-position-overlay').textContent = 'Hide overlay';
+  return { tool: 'css-position', count: stored.findings.length, note: `${moved} moved, ${changed} out of reading order` };
+}
+
+async function refreshCssPositionButtons(markers = pageMarkers()) {
+  try {
+    const m = await markers;
+    $('toggle-css-position-overlay').textContent = m.cssPosition ? 'Hide overlay' : 'Show overlay';
+    $('toggle-css-linearize').textContent = m.linearize ? 'Undo linearize' : 'Linearize';
+  } catch {
+    // leave default labels
+  }
+}
+
 function execEntry(entry, opts = {}) {
   if (entry.kind === 'hover') return execHover(entry);
   if (entry.kind === 'audio') return execAudio(entry);
   if (entry.kind === 'keyboard') return execKeyboardAccess(entry);
   if (entry.kind === 'auto-update') return execAutoUpdate(entry);
   if (entry.kind === 'tables') return execTables(entry, { draw: !opts.batch });
+  if (entry.kind === 'css-position') return execCssPosition(entry, { draw: !opts.batch });
   return execChecker(entry);
 }
 
@@ -1311,6 +1351,7 @@ function wireCheckers() {
       refreshErrorCaptureButton();
       refreshInputWatcherButton(markers);
       refreshTablesButton(markers);
+      refreshCssPositionButtons(markers);
     } catch (err) {
       checkerError(err);
     } finally {
@@ -1340,6 +1381,52 @@ function wireCheckers() {
         const { count, note } = await execTables(TABLES_ENTRY());
         announce(`tables: ${count} findings (${note}); overlay on.`);
       }
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // CSS positioning overlay: Show runs the check and draws; Hide removes the
+  // overlay (and ends Linearize) in every frame.
+  $('toggle-css-position-overlay').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    banner('');
+    try {
+      const markers = await pageMarkers();
+      if (markers.cssPosition) {
+        await inject([...LIBS, ...CSS_POSITION_FILES], true);
+        await callChecker('cssPosition', { action: 'hide' }, true);
+        btn.textContent = 'Show overlay';
+        $('toggle-css-linearize').textContent = 'Linearize';
+        announce('css-position: overlay off.');
+      } else {
+        const { count, note } = await execCssPosition(CHECKERS.find((c) => c.id === 'css-position'));
+        announce(`css-position: ${count} findings (${note}); overlay on.`);
+      }
+    } catch (err) {
+      checkerError(err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Linearize: on also draws the overlay, so the outlines follow the content
+  // to its reading-order place.
+  $('toggle-css-linearize').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    banner('');
+    try {
+      const markers = await pageMarkers();
+      const on = !markers.linearize;
+      if (on && !markers.cssPosition) await execCssPosition(CHECKERS.find((c) => c.id === 'css-position'));
+      else await inject([...LIBS, ...CSS_POSITION_FILES], true);
+      await callChecker('cssPosition', { action: 'linearize', on }, true);
+      btn.textContent = on ? 'Undo linearize' : 'Linearize';
+      announce(on ? 'css-position: page linearized. Moved content now shows in reading order.' : 'css-position: linearize off.');
     } catch (err) {
       checkerError(err);
     } finally {
@@ -1548,7 +1635,8 @@ function wireCheckers() {
 
   // Full reset: every artifact a checker leaves on the page (overlay layer,
   // text-spacing override stylesheet, live accname inspector, live-region log
-  // panels, focus locator, Tables overlay, error capture, input watcher and
+  // panels, focus locator, Tables overlay, CSS positioning overlay and
+  // linearize, error capture, input watcher and
   // its SW log), plus this tab's stored findings and Tables list (the saved
   // Data / Layout choices stay). Motion/reflow/
   // hover leave nothing behind.
@@ -1576,6 +1664,10 @@ function wireCheckers() {
       await inject([...LIBS, ...TABLE_FILES], true);
       await callChecker('tables', { action: 'hide' }, true);
       $('toggle-tables-overlay').textContent = 'Show overlay';
+      await inject([...LIBS, ...CSS_POSITION_FILES], true);
+      await callChecker('cssPosition', { action: 'hide' }, true);
+      $('toggle-css-position-overlay').textContent = 'Show overlay';
+      $('toggle-css-linearize').textContent = 'Linearize';
       // Error capture and the Input watcher: inject only when the page says
       // one is running.
       const running = await pageMarkers();
@@ -1710,6 +1802,7 @@ async function refreshForActiveTab() {
   refreshErrorCaptureButton();
   refreshInputWatcherButton(markers);
   refreshTablesButton(markers);
+  refreshCssPositionButtons(markers);
   resumeAutoUpdate(markers);
   // Catch up on watcher entries logged while no popup was open (a
   // navigation, for example).
