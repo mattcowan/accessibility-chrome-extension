@@ -44,7 +44,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   per-tab (after navigating, the toolbar icon must be clicked to re-grant).
 - `checkers/*.js` — injected as CLASSIC scripts (not modules) into the page's isolated
   world. Injection order: `checkers/lib/selector.js`, `checkers/lib/findings.js`,
-  (optional `overlay.js` / `accname.js` / `mechanism.js` / `forms.js` / `live.js`), then the checker file.
+  (optional `overlay.js` / `accname.js` / `mechanism.js` / `table.js` / `forms.js` / `live.js`), then the checker file.
   `checkers/lib/resolve.js` (`__a11yResolve`) is the exact inverse of selector.js's
   `" >>> "` shadow-path format — used by the popup's click-a-finding reveal /
   highlight-all; keep the two formats consistent. `checkers/live-regions.js` is a
@@ -161,11 +161,47 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   10, max 300) is kept in `chrome.storage.local` `autoUpdateSeconds`.
 - `checkers/lib/live.js` (`__a11yLive`: `REGION_SELECTOR`, `politenessFor`,
   `regionOf`) — live-region detection shared by `live-regions.js`, `error-capture.js`,
-  `input-watcher.js` and `auto-update.js`. `checkers/lib/forms.js` (`__a11yForms`, needs `accname.js`)
-  — field selector, radio/checkbox group members, group label (fieldset legend or
-  named group/radiogroup holding every member), table headers (`headers` attr, else
-  `th` in the same row/column on a rowspan/colspan-aware grid), a field's own
+  `input-watcher.js` and `auto-update.js`. `checkers/lib/forms.js` (`__a11yForms`, needs `accname.js`
+  and `table.js`) — field selector, radio/checkbox group members, group label (fieldset
+  legend or named group/radiogroup holding every member), table headers (delegated to
+  `table.js`, mapped to the old `{row, col, viaHeaders, complex}` shape), a field's own
   container and the visible text near it. Shared by the three TT section 5 tools.
+- `checkers/lib/table.js` (`__a11yTable`) — the table model: HTML "forming a table"
+  (row groups in tree order with tfoot LAST, colgroups, rowspan=0, slot grid capped at
+  20000) and the spec's "algorithm for assigning header cells" (headers attr first,
+  else the left/up scan with opaque blocks, plus rowgroup/colgroup headers). One
+  deliberate deviation: deciding if an auto-scope th heads its row or column ignores
+  EMPTY data cells (an empty td corner must not turn the row headers off). ARIA tables
+  (role table/grid/treegrid on a non-table) use row index + cell order, as Chrome does.
+  Shared by `tables.js` and `forms.js`. `headersOf(m, cell, {wholeLine: true})` adds
+  every row header of the cell's rows and column header of its columns at ANY position
+  (`lineHeaders`; Chrome gives screen readers headers this way): the spec scan only looks
+  left/up, so a bulk-select checkbox named by the row th to its RIGHT got no header and
+  Form labels turned review into fail (peer review 2026-10-15). Use wholeLine for "does
+  it have a header" questions (forms.js, the no-header rule); the plain call is the spec
+  result (the `headers` action, E2E `data-expect-headers`). Per-model indexes (`byEl`,
+  `rowHeadsAt`/`colHeadsAt`, group-header maps) keep per-cell lookups linear: the first
+  version rebuilt them per cell (O(cells²): 2000×10 with headers attrs took 78 s).
+  `cellOf(el, cache)` takes a Map the CALLER owns for one run (Form labels makes one per
+  `formLabels()` call; never a long-lived cache — the stateful tools would read stale
+  models). A cell past the MAX_SLOTS cap returns `{cell: null, truncated: true}`, and
+  forms.js reports it as `unknown`: Form labels then gives `review`, never `fail`
+  (PR #28 review: a bulk-select group past the cap read as "not in a table" → fail).
+- `checkers/tables.js` (1.3.1 / TT section 14, registry `kind: 'tables'`, allFrames,
+  batchable) — `{action: scan|show|hide|status|headers}`. `execTables` first sends
+  `tableAX` (Chrome's role per top-document table), then calls the checker with
+  `{axTables, axError, overrides}`. The guess (data/layout/unsure) is a weighted score
+  of markup, visual and Chrome signs (`role=presentation` → layout and an ARIA table
+  role → data, before scoring). The tester's choice lives in `chrome.storage.local`
+  `tableClass:${normUrl}` = `{"${page}|${selector}": 'data'|'layout'}` (page = the
+  frame's own origin+path+search, so frame selectors do not collide); a rule whose
+  result depends on the classification is `fail` only for a CHOSEN class, `review` for
+  a guess. One finding per table (all issues merged). Run draws the overlay (own layer
+  `#__a11y-tables`, marker `data-a11y-tables`, redrawn on scroll/resize, NOT cleared by
+  Clear overlays); a batch run and a changed choice only scan (scan redraws an overlay
+  that is on). The popup keeps the last list in session `tables:${tabId}` (with a
+  `stamp`, so the side panel re-renders a list the popup stored but not its own — that
+  would drop focus from the radio just changed).
 - `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
   batchable) — group with no group label is `fail`, `review` when a member has
   aria-describedby, every member has table headers (bulk select), or a member's
@@ -255,7 +291,10 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `hoverProbe {action: start|move|escape|end}`, `recordAudio` (→ `{ok, loaded}` after
   the reload finishes), `clickListeners` (→ `{ok, paths: [{path, tag}], truncated}`;
   attaches, reads, releases; refused during Reload and record; any CDP error other
-  than "node gone" fails the whole read → `ok:false`), `inputWatch {action:
+  than "node gone" fails the whole read → `ok:false`), `tableAX` (→ `{ok, tables:
+  [{path, tag, role, ignored}], truncated}`, Chrome's AX role per table in the top
+  document via `Accessibility.getPartialAXTree`; same hold/refusal/error rules as
+  `clickListeners`), `inputWatch {action:
   start|stop|status}` from the popup and `{action: mark|unmark|event}` from the
   watcher's content script (top frame, tab from `sender.tab`), `exec {files,
   allFrames}` (→ `{ok}`) and `exec {global, method, args, allFrames}` (→ `{ok,
@@ -265,7 +304,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   that frame's result), `resetTab`. Pages also
   post `errorCaptureUpdate` (a `PAGE_NOTICES` type: the SW returns false and never
   answers it; popup/panel consume it). Reload and record,
-  `clickListeners` and the hover probe (start→end) take an in-memory per-tab
+  `clickListeners`, `tableAX` and the hover probe (start→end) take an in-memory per-tab
   **debugger hold** (`holdDebugger`/`releaseDebugger` in debugger-manager.js; the
   hover probe uses `holdHover`/`touchHover`/`releaseHover` — one slot per tab, not a
   count, so a lapsed hold cannot outlive the next probe — and its hold lapses after
@@ -330,6 +369,13 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   the PR #26 review, a crashed checker therefore read as a clean "0 findings". The
   `exec` wrapper catches and returns `{error}`; keep it that way, and never treat a
   null result as "nothing found" in new code.
+- **Chrome's layout-table guess is visible only in the AX tree** (role `LayoutTable`
+  vs `table`; rows/cells `LayoutTableRow`/`LayoutTableCell`). Verified 2026-10-15 on
+  Chromium 149: a data-looking table with no th AND no cell borders is `LayoutTable`
+  (borders alone flip it to `table`); `role="presentation"` plus `aria-label` is
+  ignored (→ `table`); `display:block` keeps `table`. `Accessibility.getPartialAXTree
+  ({objectId, fetchRelatives:false})` works with no `Accessibility.enable` or
+  `DOM.getDocument` first.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,
   `prefers-reduced-transparency`) are capability-probed on first attach and their UI
   hidden if rejected — keep the probe when adding features.
@@ -339,14 +385,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 275 checks on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
   `chrome.runtime.sendMessage` and `chrome.scripting` from that page. It asserts against
   `data-expect` in test-pages. It covers motion 2.B, audio, Reload and record, the
   batch runner, no user activation from any checker path (`[#15]`, probed from the
-  SW, with a real page click as the control), auto-update (`data-expect` = 2.2.2,
+  SW, with a real page click as the control), tables (guess, Chrome role, header
+  algorithm per cell via `data-expect-headers`, overlay, the saved choice), auto-update (`data-expect` = 2.2.2,
   `data-expect-notify` = 4.1.2), keyboard access, the focus locator, and the TT section 5 tools (form
   labels, error capture, input watcher — the test plays the tester with real
   clicks/keys/selects); older checkers have no section yet — **extend it with each new checker**

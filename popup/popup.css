@@ -298,6 +298,93 @@ code.sel {
   overflow-wrap: anywhere;
 }
 
+/* Tables list (one item per table, with the Data / Layout choice). */
+.tables-panel {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+#tables-summary {
+  margin: 0 0 4px;
+  font-size: 12px;
+}
+
+#tables-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.table-item {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.table-item:first-child {
+  border-top: 0;
+}
+
+.table-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.table-reveal {
+  min-height: 22px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.table-facts,
+.table-check {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.table-class {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.table-class legend {
+  float: left;
+  padding: 0;
+  margin-right: 6px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.table-class label {
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+.table-issues {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+}
+
+.table-evidence summary {
+  cursor: pointer;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.table-evidence ul {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+}
+
 .buttons {
   display: flex;
   flex-wrap: wrap;

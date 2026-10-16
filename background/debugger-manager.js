@@ -163,7 +163,7 @@ export async function detachIfIdle(tabId) {
 }
 
 // Transient debugger users on a tab (hover probe start→end, the click-listener
-// read, Reload and record). Each holds the session while it works; the
+// read, the table-role read, Reload and record). Each holds the session while it works; the
 // debugger detaches only when no hold is left AND no emulation is on, so
 // neither one user's cleanup nor an emulation toggle can detach another user
 // mid-way (the popup and the side panel can both drive one tab).
@@ -372,6 +372,69 @@ export async function clickListenerPaths(tabId) {
     return { paths, truncated: ids.length > LISTENER_NODE_CAP };
   } finally {
     await sendCommand(tabId, 'Runtime.releaseObjectGroup', { objectGroup: LISTENER_GROUP }).catch(() => {});
+  }
+}
+
+// --- Chrome's table roles for the Tables checker (1.3.1 / TT section 14) ---
+// Chrome guesses which tables are layout tables (role LayoutTable) and which
+// are data tables (role table), and screen readers use that guess. Only the
+// accessibility tree shows it. Returns {path, tag, role, ignored} for every
+// <table> and role table/grid/treegrid element in the top document (open
+// shadow roots included), with the same child-index path as the click
+// listeners. Tables in iframes are not read.
+
+const TABLE_GROUP = 'a11y-table-roles';
+const TABLE_CAP = 300;
+// The role filter is the page checker's (table.js roleOf): only the FIRST
+// role token counts, so role="presentation table" is not listed. This is
+// code inside a template literal, so the regex backslash is doubled.
+const TABLE_LIST_EXPR = `(() => {
+  const out = [];
+  const sel = 'table, [role~="table"], [role~="grid"], [role~="treegrid"]';
+  const roles = ['table', 'grid', 'treegrid'];
+  const first = (el) => (el.getAttribute('role') || '').trim().toLowerCase().split(/\\s+/)[0];
+  const walk = (root) => {
+    for (const el of root.querySelectorAll(sel)) if (el.tagName === 'TABLE' || roles.includes(first(el))) out.push(el);
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot);
+  };
+  walk(document);
+  return out;
+})()`;
+
+export async function tableRoles(tabId) {
+  try {
+    const { result: list } = await sendCommand(tabId, 'Runtime.evaluate', {
+      expression: TABLE_LIST_EXPR,
+      objectGroup: TABLE_GROUP,
+    });
+    const { result: props } = await sendCommand(tabId, 'Runtime.getProperties', {
+      objectId: list.objectId,
+      ownProperties: true,
+    });
+    const items = props.filter((p) => /^\d+$/.test(p.name) && p.value && p.value.objectId);
+    const tables = [];
+    for (const p of items.slice(0, TABLE_CAP)) {
+      try {
+        const { nodes } = await sendCommand(tabId, 'Accessibility.getPartialAXTree', {
+          objectId: p.value.objectId,
+          fetchRelatives: false,
+        });
+        const { result } = await sendCommand(tabId, 'Runtime.callFunctionOn', {
+          objectId: p.value.objectId,
+          functionDeclaration: PATH_FN,
+          returnByValue: true,
+        });
+        const node = nodes && nodes[0];
+        if (!node || !result.value || !Array.isArray(result.value.path)) continue;
+        tables.push({ ...result.value, role: (node.role && node.role.value) || '', ignored: !!node.ignored });
+      } catch (e) {
+        // As for the click listeners: only a node that went away is skipped.
+        if (!NODE_GONE.test(e && e.message)) throw e;
+      }
+    }
+    return { tables, truncated: items.length > TABLE_CAP };
+  } finally {
+    await sendCommand(tabId, 'Runtime.releaseObjectGroup', { objectGroup: TABLE_GROUP }).catch(() => {});
   }
 }
 

@@ -45,6 +45,7 @@ if (!globalThis.__a11yOps) {
         errorCapture: ds.a11yErrorCapture === 'on',
         inputWatcher: ds.a11yInputWatcher === 'on',
         liveMonitor: ds.a11yLiveMonitor === 'on',
+        tables: ds.a11yTables === 'on',
         autoUpdate: ds.a11yAutoUpdate || null, // 'watching' | 'done' | null
       };
     },

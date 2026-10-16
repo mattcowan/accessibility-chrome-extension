@@ -151,6 +151,25 @@
   </div>
 
   <div class="test-section">
+    <h2>(l2) Bulk-select checkboxes: the only header is the row header to their right</h2>
+    <!-- The select-all column header holds only a checkbox (no text), so the
+         row header to the RIGHT of each checkbox is its only context. The
+         spec's leftward header scan misses it; screen readers do not. -->
+    <form>
+      <table>
+        <thead>
+          <tr><th><input type="checkbox" aria-label="Select all"></th><th>Name</th><th>Email</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><input type="checkbox" name="ids[]" id="ids-1" value="1" data-expect="review"></td><th scope="row">Alice</th><td>a@example.com</td></tr>
+          <tr><td><input type="checkbox" name="ids[]" value="2"></td><th scope="row">Bob</th><td>b@example.com</td></tr>
+          <tr><td><input type="checkbox" name="ids[]" value="3"></td><th scope="row">Cara</th><td>c@example.com</td></tr>
+        </tbody>
+      </table>
+    </form>
+  </div>
+
+  <div class="test-section">
     <h2>(m) Radio buttons whose aria-labelledby joins the question and the option</h2>
     <form>
       <p id="pay-q">How do you want to pay?</p>

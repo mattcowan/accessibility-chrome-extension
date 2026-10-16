@@ -7,8 +7,8 @@
 //   __a11yCheckers.errorCapture('collect') -> findings (one per field that
 //       showed an error, wcag 3.3.1: `warn` when the error is shown only by a
 //       color change with no text, else `review`)
-// Needs selector.js, findings.js, accname.js, lib/forms.js, focus-style.js and
-// lib/live.js. Top frame only.
+// Needs selector.js, findings.js, accname.js, lib/table.js, lib/forms.js,
+// focus-style.js and lib/live.js. Top frame only.
 //
 // It only watches: the tester types and submits; the capture never types,
 // clicks or submits. At start it records each field (aria-invalid, the text
