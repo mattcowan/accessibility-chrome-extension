@@ -243,12 +243,15 @@ if (!globalThis.__a11yCssPositionChecker) {
       const r = el.getBoundingClientRect();
       if (r.width <= 1 && r.height <= 1 && cs.overflow !== 'visible') return true;
       if (!ext) return true;
-      // Outside the area anyone can scroll to. A fixed element lives in the
-      // window. Anything else is measured against the root box, which moves
-      // with the scroll; in an RTL page the scrollable area grows to the
-      // LEFT of the root box (scrollX is negative there), so a plain
-      // "x + scrollX < 0" test would hide visible content.
-      if (cs.position === 'fixed') {
+      // Outside the area anyone can scroll to. A fixed element, and anything
+      // inside one (a child pushed below a bottom-fixed bar never scrolls
+      // into view), lives in the window. Not sticky: a sticky header further
+      // down the page is reached by scrolling. Anything else is measured
+      // against the root box, which moves with the scroll; in an RTL page the
+      // scrollable area grows to the LEFT of the root box (scrollX is
+      // negative there), so a plain "x + scrollX < 0" test would hide
+      // visible content.
+      if (floats(el, ['fixed'])) {
         return ext.right <= 0 || ext.bottom <= 0 || ext.left >= window.innerWidth || ext.top >= window.innerHeight;
       }
       const root = document.documentElement;
@@ -280,10 +283,9 @@ if (!globalThis.__a11yCssPositionChecker) {
 
     // True when el or an ancestor is fixed or sticky: it moves in page
     // coordinates when the window scrolls.
-    function floats(el) {
+    function floats(el, kinds = ['fixed', 'sticky']) {
       for (let n = el; n && n.nodeType === Node.ELEMENT_NODE; ) {
-        const p = getComputedStyle(n).position;
-        if (p === 'fixed' || p === 'sticky') return true;
+        if (kinds.includes(getComputedStyle(n).position)) return true;
         n = n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
       }
       return false;

@@ -82,6 +82,11 @@
     .center-row .short { order: 1; }
     .center-row .tall { order: 2; width: 12rem; }
 
+    /* Flex order that swaps a short item before a tall centered one. */
+    .center-swap { display: flex; align-items: center; gap: 1rem; }
+    .center-swap .tall { width: 12rem; }
+    .center-swap .short { order: -1; }
+
     /* RTL section: order that keeps the code order. */
     .rtl-row { display: flex; gap: 1rem; }
     .rtl-row span { order: 1; }
@@ -226,6 +231,14 @@
     <div class="center-row" id="center-row" data-expect="pass">
       <span class="short">Short item.</span>
       <span class="tall">A tall item that wraps onto several lines, so its first line starts above the short item on its left.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>25. Flex order that swaps a short item before a tall centered one</h2>
+    <div class="center-swap" id="center-swap" data-expect="review">
+      <span class="tall">A tall item that wraps onto several lines; it is first in the code but shows second.</span>
+      <span class="short">Short item, shown first.</span>
     </div>
   </section>
 
