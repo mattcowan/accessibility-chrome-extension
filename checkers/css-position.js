@@ -157,12 +157,19 @@ if (!globalThis.__a11yCssPositionChecker) {
 
     // Content in reading order: [{node, first, last, rects, label}], where
     // first/last are the first and last line rects (viewport coordinates).
+    // items.truncated = the page has more than MAX_ITEMS; the rest is not
+    // read, and analyze says so in a (page) review.
     function collectContent() {
       const items = [];
+      items.truncated = false;
       if (document.body) {
         walkContent(document.body, (node, rects, label) => {
+          if (items.length >= MAX_ITEMS) {
+            items.truncated = true;
+            return false;
+          }
           items.push({ node, first: rects[0], last: rects[rects.length - 1], rects, label });
-          return items.length < MAX_ITEMS;
+          return true;
         });
       }
       return items;
@@ -236,11 +243,20 @@ if (!globalThis.__a11yCssPositionChecker) {
       const r = el.getBoundingClientRect();
       if (r.width <= 1 && r.height <= 1 && cs.overflow !== 'visible') return true;
       if (!ext) return true;
-      const sx = window.scrollX;
-      const sy = window.scrollY;
-      const docW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
-      const docH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
-      return ext.right + sx <= 0 || ext.bottom + sy <= 0 || ext.left + sx >= docW || ext.top + sy >= docH;
+      // Outside the area anyone can scroll to. A fixed element lives in the
+      // window. Anything else is measured against the root box, which moves
+      // with the scroll; in an RTL page the scrollable area grows to the
+      // LEFT of the root box (scrollX is negative there), so a plain
+      // "x + scrollX < 0" test would hide visible content.
+      if (cs.position === 'fixed') {
+        return ext.right <= 0 || ext.bottom <= 0 || ext.left >= window.innerWidth || ext.top >= window.innerHeight;
+      }
+      const root = document.documentElement;
+      const rr = root.getBoundingClientRect();
+      const w = Math.max(root.scrollWidth, window.innerWidth);
+      const h = Math.max(root.scrollHeight, window.innerHeight);
+      const x0 = getComputedStyle(root).direction === 'rtl' ? rr.right - w : rr.left;
+      return ext.right <= x0 || ext.left >= x0 + w || ext.bottom <= rr.top || ext.top >= rr.top + h;
     }
 
     function union(rects) {
@@ -293,11 +309,18 @@ if (!globalThis.__a11yCssPositionChecker) {
 
     // ------------------------------------------------------- visual order
 
+    function sameLine(a, b) {
+      const overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      return overlap >= Math.max(TOL, Math.min(a.bottom - a.top, b.bottom - b.top) / 2);
+    }
+
     // Where b is, seen from a, in reading order: 'after' | 'before' |
     // 'overlap'. Above/below wins; on the same line, the inline direction.
     function compare(a, b, isRtl) {
-      if (a.bottom <= b.top + TOL) return 'after';
-      if (b.bottom <= a.top + TOL) return 'before';
+      // Not on one line unless they overlap vertically by half the shorter
+      // box: a block nudged up a few px (position: relative; top: -5px)
+      // overlaps the line above a little, and is below it, not on top of it.
+      if (!sameLine(a, b)) return (b.top + b.bottom) / 2 >= (a.top + a.bottom) / 2 ? 'after' : 'before';
       const right = b.left >= a.right - TOL;
       const left = b.right <= a.left + TOL;
       if (right) return isRtl ? 'before' : 'after';
@@ -328,21 +351,30 @@ if (!globalThis.__a11yCssPositionChecker) {
       const indexOf = new Map(content.map((c, i) => [c.node, i]));
       // Content index range inside the element (content is in flat-tree
       // order, so the element's items are one contiguous run).
-      function rangeOf(el) {
-        let first = -1;
-        let last = -1;
-        const stack = [el];
-        while (stack.length) {
-          const node = stack.pop();
-          const i = indexOf.get(node);
-          if (i !== undefined) {
-            if (first < 0 || i < first) first = i;
-            if (i > last) last = i;
-            if (node !== el) continue;
+      // Memoized per node, so nested moved elements (an absolute page
+      // wrapper) do not walk the same subtree again: one pass in all.
+      const ranges = new Map();
+      function rangeOf(node) {
+        let r = ranges.get(node);
+        if (r) return r;
+        const i = indexOf.get(node);
+        if (i !== undefined) {
+          r = [i, i]; // a text run or a unit: one stop, its inside is not read
+        } else {
+          let first = -1;
+          let last = -1;
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            for (const child of childrenOf(node)) {
+              const [f, l] = rangeOf(child);
+              if (f < 0) continue;
+              if (first < 0 || f < first) first = f;
+              if (l > last) last = l;
+            }
           }
-          if (node.nodeType === Node.ELEMENT_NODE) stack.push(...childrenOf(node));
+          r = [first, last];
         }
-        return [first, last];
+        ranges.set(node, r);
+        return r;
       }
 
       // Pass 1: what each moved element holds, and whether anyone sees it.
@@ -498,6 +530,19 @@ if (!globalThis.__a11yCssPositionChecker) {
           })
         );
       }
+      if (content.truncated) {
+        findings.push(
+          F.makeFinding({
+            tool: TOOL,
+            wcag: WCAG,
+            severity: 'review',
+            el: null,
+            details:
+              `The page has more than ${MAX_ITEMS} text runs, images and fields, so the CSS positioning check read only the first ${MAX_ITEMS}. ` +
+              'Content positioned with CSS after that was not checked. Check the reading order of the rest of the page by hand (WCAG 1.3.2, TT 15.B).',
+          })
+        );
+      }
       entries = list.map((m) => ({ el: m.el, summary: m.summary, move: m.move, reorder: m.reorder, floats: floats(m.el) }));
       return { items: summaries, hidden, findings };
     }
@@ -534,10 +579,9 @@ if (!globalThis.__a11yCssPositionChecker) {
       for (let k = 1; k < items.length; k++) {
         const a = items[k - 1].box;
         const b = items[k].box;
-        const sameLine = a.top < b.bottom - TOL && b.top < a.bottom - TOL;
-        const before = sameLine
+        const before = sameLine(a, b)
           ? (isRtl ? b.right > a.right + TOL : b.left < a.left - TOL)
-          : b.bottom <= a.top + TOL;
+          : (b.top + b.bottom) / 2 < (a.top + a.bottom) / 2;
         if (before) pairs.push({ a: items[k - 1], b: items[k] });
       }
       return pairs;

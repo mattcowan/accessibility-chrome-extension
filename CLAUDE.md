@@ -236,7 +236,15 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   bounds staleness from layout shifts and fixed DESCENDANTS, which `floats` does
   not see). Scan and overlay share one content walk
   (`walkContent`: aria-hidden, display, visibility and unit rules), and the overlay
-  skips the visually hidden moved elements the scan skipped. Always `review`. Why not trust ANDI: Chrome returns used px,
+  skips the visually hidden moved elements the scan skipped. "Same line"
+  (`sameLine`) = vertical overlap ≥ half the shorter box; otherwise vertical
+  centers decide — with a fixed 2px tolerance, a block nudged up 5px read as
+  "covers" the line above (PR #30 review). Off page (`visuallyHidden`) is measured
+  against the window for fixed elements and against the root box otherwise: in
+  an RTL page `scrollX` is negative and the scrollable area grows LEFT of the root
+  box, so `x + scrollX < 0` hid in-view content. Past `MAX_ITEMS` content items
+  the scan stops and adds a `(page)` review. `rangeOf` is memoized per node (one
+  pass; no `push(...children)`, which throws on huge child lists). Always `review`. Why not trust ANDI: Chrome returns used px,
   never `auto`, for top/left/bottom/right on relative/absolute/fixed elements with
   no offset (verified 2026-10-16, Chromium 149), so ANDI's offset filter marks
   every one of them; and its glow is a box-shadow on the element's own box, which a
@@ -438,7 +446,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when Matt says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 432 checks on 2026-10-16 after CSS positioning (#29, +45) and its peer review: 381 in the default (muted) run + 51 with `--audio` (the audio count is from the run before the review; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 433 checks on 2026-10-17 after CSS positioning (#29, +46) and the PR #30 review: 382 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

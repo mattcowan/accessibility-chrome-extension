@@ -91,6 +91,10 @@
     .nest-host { position: relative; padding-top: 2rem; }
     .nest-host .nest { position: absolute; top: 0; left: 0; }
 
+    /* A block nudged up 5 px into the line above (optical alignment). */
+    .nudge-host div { margin: 0; }
+    .nudge-host .nudge-block { position: relative; top: -5px; }
+
     /* A bare text run is an anonymous flex item. */
     .anon { display: flex; flex-direction: row-reverse; justify-content: flex-end; gap: .5rem; }
   </style>
@@ -237,6 +241,14 @@
     <div class="nest-host">
       <p>Neighbor text, read before the label.</p>
       <div class="nest" id="nest-a" data-expect="review"><div class="nest" id="nest-b" data-expect="pass"><span class="nest" id="nest-c" data-expect="pass">Nested label</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>24. Block nudged up a few pixels</h2>
+    <div class="nudge-host">
+      <div>First block, no margin.</div>
+      <div class="nudge-block" id="nudge-block" data-expect="pass">Second block, nudged up 5 px into the first.</div>
     </div>
   </section>
 
