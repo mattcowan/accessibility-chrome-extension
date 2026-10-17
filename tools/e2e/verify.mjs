@@ -934,6 +934,20 @@ async function silentSections() {
     // page is scrolled when the tool runs.
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await sleep(300);
+    // After a page scroll the outlines still sit on their elements: a normal
+    // one reuses its page extent, a fixed one is measured again.
+    const follows = await page.evaluate(() => {
+      const layer = document.getElementById('__a11y-css-position');
+      const on = (sel) => {
+        const b = layer && layer.querySelector(`[data-selector="${sel}"]`);
+        if (!b) return false;
+        const o = b.getBoundingClientRect();
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return o.left <= r.left + 1 && o.top <= r.top + 1 && o.right >= r.right - 1 && o.bottom >= r.bottom - 1;
+      };
+      return { gridSwap: on('#grid-swap'), fixedTop: on('#fixed-top') };
+    });
+    check('[css-position] after a page scroll, outlines follow their elements (normal and fixed)', follows.gridSwap && follows.fixedTop, JSON.stringify(follows));
     await clickAndWait(env, 'run-css-position', /^css-position: \d+ findings/);
     const scrolled = await storedFindings(env, tabId, 'css-position');
     check('[css-position] scrolled to the end: the top-fixed header is still out of order, the note still not',
@@ -977,6 +991,7 @@ async function silentSections() {
         aside: getComputedStyle(document.getElementById('aside')).float,
         flex: getComputedStyle(document.getElementById('row-reverse')).flexDirection,
         order: getComputedStyle(document.querySelector('#ordered .first')).order,
+        gridInline: document.getElementById('gi-inline').style.gridColumnStart,
         marked: document.querySelectorAll('[data-a11y-linearize]').length,
         marker: document.documentElement.dataset.a11yLinearize || null,
       }));
@@ -986,7 +1001,7 @@ async function silentSections() {
     check('[css-position] the Linearize button reads Undo linearize', (await env.popup.evaluate(() => document.getElementById('toggle-css-linearize').textContent)) === 'Undo linearize');
     await clickAndWait(env, 'toggle-css-linearize', /^css-position: linearize off/);
     l = await layout();
-    check('[css-position] Undo linearize puts the page\'s values back', l.price === 'absolute' && l.aside === 'right' && l.flex === 'row-reverse' && l.order === '-1' && l.marked === 0 && !l.marker, JSON.stringify(l));
+    check('[css-position] Undo linearize puts the page\'s values back, including a partial inline grid placement', l.price === 'absolute' && l.aside === 'right' && l.flex === 'row-reverse' && l.order === '-1' && l.gridInline === '1' && l.marked === 0 && !l.marker, JSON.stringify(l));
     await clickAndWait(env, 'toggle-css-linearize', /^css-position: page linearized/);
     await clickAndWait(env, 'toggle-css-position-overlay', /^css-position: overlay off/);
     l = await layout();

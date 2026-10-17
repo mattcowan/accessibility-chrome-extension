@@ -60,11 +60,15 @@ if (!globalThis.__a11yCssPositionChecker) {
     const QUOTE_LEN = 40;
     const MAX_PAIRS = 3; // out-of-order item pairs named in one container finding
 
-    let entries = []; // last scan: [{el, summary}]
+    let entries = []; // last scan: [{el, summary, move, reorder}]
+    let hiddenEls = new Set(); // last scan: visually hidden moved elements
     let layer = null;
     let frame = 0;
+    let fullNext = true; // the next draw measures every extent again
+    let lastFull = 0; // performance.now() of the last full measure
+    const FULL_EVERY_MS = 1000;
     let listening = false;
-    let saved = null; // linearize preview: [{el, position, float}]
+    let saved = null; // linearize preview: [{el, prop, value, priority}]
 
     const own = (el) => el && el.id && el.id.startsWith('__a11y');
 
@@ -117,35 +121,50 @@ if (!globalThis.__a11yCssPositionChecker) {
       return Array.from(r.getClientRects()).filter((x) => x.width > 0 && x.height > 0);
     }
 
-    // Content in reading order: [{node, el, first, last, label}], where
-    // first/last are the first and last line rects (viewport coordinates).
-    function collectContent() {
-      const items = [];
-      function walk(parent) {
+    // The content a screen reader reads under root, in flat-tree order:
+    // visit(node, rects, label) for each text run and each unit (image with
+    // alt text, field, media). One walk for the scan and the overlay, so an
+    // outline never covers content the scan did not compare. skipEl(el) =
+    // true leaves out that subtree (the visually hidden moved elements);
+    // visit returns false to stop.
+    function walkContent(root, visit, skipEl) {
+      let go = true;
+      (function walk(parent) {
         for (const node of childrenOf(parent)) {
-          if (items.length >= MAX_ITEMS) return;
+          if (!go) return;
           if (node.nodeType === Node.TEXT_NODE) {
             const text = node.textContent.replace(/\s+/g, ' ').trim();
             if (!text || !node.parentElement || !rendered(node.parentElement)) continue;
             const rects = rectsOfText(node);
-            if (!rects.length) continue;
-            items.push({ node, el: node.parentElement, first: rects[0], last: rects[rects.length - 1], rects, label: `“${quote(text)}”` });
+            if (rects.length) go = visit(node, rects, `“${quote(text)}”`) !== false;
             continue;
           }
           if (node.nodeType !== Node.ELEMENT_NODE || SKIP_TAGS.has(node.tagName) || own(node)) continue;
           if (node.getAttribute('aria-hidden') === 'true') continue;
           if (getComputedStyle(node).display === 'none') continue;
+          if (skipEl && skipEl(node)) continue;
           const unit = unitName(node);
           if (unit) {
             if (!rendered(node)) continue;
             const rect = node.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) items.push({ node, el: node, first: rect, last: rect, rects: [rect], label: unit });
+            if (rect.width > 0 && rect.height > 0) go = visit(node, [rect], unit) !== false;
             continue; // one stop: its inside is not read separately
           }
           walk(node);
         }
+      })(root);
+    }
+
+    // Content in reading order: [{node, first, last, rects, label}], where
+    // first/last are the first and last line rects (viewport coordinates).
+    function collectContent() {
+      const items = [];
+      if (document.body) {
+        walkContent(document.body, (node, rects, label) => {
+          items.push({ node, first: rects[0], last: rects[rects.length - 1], rects, label });
+          return items.length < MAX_ITEMS;
+        });
       }
-      if (document.body) walk(document.body);
       return items;
     }
 
@@ -243,6 +262,17 @@ if (!globalThis.__a11yCssPositionChecker) {
       return u;
     }
 
+    // True when el or an ancestor is fixed or sticky: it moves in page
+    // coordinates when the window scrolls.
+    function floats(el) {
+      for (let n = el; n && n.nodeType === Node.ELEMENT_NODE; ) {
+        const p = getComputedStyle(n).position;
+        if (p === 'fixed' || p === 'sticky') return true;
+        n = n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
+      }
+      return false;
+    }
+
     function shift(r, dx, dy) {
       return { left: r.left + dx, right: r.right + dx, top: r.top + dy, bottom: r.bottom + dy, width: r.width, height: r.height };
     }
@@ -252,6 +282,9 @@ if (!globalThis.__a11yCssPositionChecker) {
       const list = [];
       if (el.matches(F.INTERACTIVE_SELECTOR)) list.push(el);
       F.collectMatching(el, F.INTERACTIVE_SELECTOR, list);
+      // collectMatching enters the shadow roots of el's descendants, not el's
+      // own (a <chat-widget> host with its button in its shadow tree).
+      if (el.shadowRoot) F.collectMatching(el.shadowRoot, F.INTERACTIVE_SELECTOR, list);
       const hit = list.find((c) => F.isVisible(c));
       if (!hit) return null;
       const name = (hit.getAttribute('aria-label') || hit.textContent || hit.getAttribute('value') || '').replace(/\s+/g, ' ').trim();
@@ -259,8 +292,6 @@ if (!globalThis.__a11yCssPositionChecker) {
     }
 
     // ------------------------------------------------------- visual order
-
-    const rtl = () => getComputedStyle(document.documentElement).direction === 'rtl';
 
     // Where b is, seen from a, in reading order: 'after' | 'before' |
     // 'overlap'. Above/below wins; on the same line, the inline direction.
@@ -276,7 +307,6 @@ if (!globalThis.__a11yCssPositionChecker) {
 
     function analyze() {
       const content = collectContent();
-      const isRtl = rtl();
       const list = [];
       let hidden = 0;
 
@@ -323,6 +353,7 @@ if (!globalThis.__a11yCssPositionChecker) {
       const unseen = new Set();
       const floating = new Set();
       const seen = [];
+      hiddenEls = new Set();
       for (const m of moved) {
         const [first, last] = rangeOf(m.el);
         if (first < 0) continue; // nothing a screen reader reads
@@ -330,6 +361,7 @@ if (!globalThis.__a11yCssPositionChecker) {
         const ext = union([m.el.getBoundingClientRect(), ...inside.flatMap((c) => c.rects)]);
         if (visuallyHidden(m.el, m.cs, ext)) {
           hidden++;
+          hiddenEls.add(m.el);
           for (let i = first; i <= last; i++) unseen.add(i);
           continue;
         }
@@ -337,26 +369,49 @@ if (!globalThis.__a11yCssPositionChecker) {
         Object.assign(m, { ext, first, last });
         seen.push(m);
       }
-      const skip = (i) => unseen.has(i) || floating.has(i);
 
       // Pass 2: a moved element is compared with its nearest seen neighbors;
       // a reordering container compares its items with each other.
+      // `seen` is in tree order, so a stack of the open entries gives each one
+      // its nearest seen ancestor entry (`up`) in O(depth).
+      const open = [];
       for (const m of seen) {
+        while (open.length && !holds(open[open.length - 1].el, m.el)) open.pop();
+        m.up = open[open.length - 1] || null;
+        open.push(m);
+        let fixedUp = m.up;
+        while (fixedUp && fixedUp.move !== 'fixed') fixedUp = fixedUp.up;
+
         const inside = content.slice(m.first, m.last + 1).filter((c, k) => !unseen.has(m.first + k));
         if (!inside.length) continue;
         m.inside = inside;
         m.issues = [];
-        m.pairs = m.reorder ? itemPairs(m.el, rangeOf, content, unseen, isRtl) : [];
+        m.pairs = m.reorder ? itemPairs(m.el, rangeOf, content, unseen) : [];
+        if (m.move && fixedUp && fixedUp.pin === 'bottom') {
+          // Inside a bottom-fixed element: that element is outlined, and has
+          // the only finding (when it holds a control).
+          list.push(m);
+          continue;
+        }
         if (m.move) {
+          // Inside a fixed element, the content around it moves with it on
+          // scroll, so compare only within that element (no scroll shift).
+          // Elsewhere, content in fixed elements is never a neighbor.
+          const lo = fixedUp ? fixedUp.first : 0;
+          const hi = fixedUp ? fixedUp.last : content.length - 1;
+          const skip = (i) => unseen.has(i) || (!fixedUp && floating.has(i));
           let p = m.first - 1;
-          while (p >= 0 && skip(p)) p--;
+          while (p >= lo && skip(p)) p--;
           let q = m.last + 1;
-          while (q < content.length && skip(q)) q++;
-          const prev = p >= 0 ? content[p] : null;
-          const next = q < content.length ? content[q] : null;
+          while (q <= hi && skip(q)) q++;
+          const prev = p >= lo ? content[p] : null;
+          const next = q <= hi ? content[q] : null;
+          // The inline direction where the element sits (a dir="rtl"
+          // section can be on a left-to-right page).
+          const isRtl = getComputedStyle(m.el.parentElement || m.el).direction === 'rtl';
           let start = inside[0].first;
           let end = inside[inside.length - 1].last;
-          if (m.move === 'fixed') {
+          if (m.move === 'fixed' && !fixedUp) {
             const vh = window.innerHeight;
             const mid = (m.ext.top + m.ext.bottom) / 2;
             m.pin = mid < vh / 2 ? 'top' : 'bottom';
@@ -393,9 +448,13 @@ if (!globalThis.__a11yCssPositionChecker) {
       const findings = [];
       const summaries = [];
       for (const m of list) {
-        const outer = list.find((o) => o !== m && o.move && holds(o.el, m.el));
-        if (outer) {
-          m.issues = m.issues.filter((i) => !outer.issues.some((oi) => oi.other === i.other));
+        // Against EVERY moved ancestor's unfiltered issues: with A ⊃ B ⊃ C
+        // sharing one neighbor, B's copy is already filtered out, so checking
+        // C against B's filtered list alone would repeat A's note.
+        m.raw = m.issues.slice();
+        for (let o = m.up; o; o = o.up) {
+          if (!o.move || !o.raw) continue;
+          m.issues = m.issues.filter((i) => !o.raw.some((oi) => oi.other === i.other));
         }
         const notes = [...m.issues.map(describe), ...m.pairs.map(describePair)];
         const how = [m.pin ? `fixed (${m.pin})` : m.move, m.reorder].filter(Boolean).join('; ');
@@ -439,29 +498,47 @@ if (!globalThis.__a11yCssPositionChecker) {
           })
         );
       }
-      entries = list.map((m) => ({ el: m.el, summary: m.summary, move: m.move, reorder: m.reorder }));
+      entries = list.map((m) => ({ el: m.el, summary: m.summary, move: m.move, reorder: m.reorder, floats: floats(m.el) }));
       return { items: summaries, hidden, findings };
     }
 
     // The in-flow items of a reordering container, compared pairwise in code
-    // order by where each one STARTS (first line): a tall item beside short
-    // ones must not count as "after" them because its last line is lower.
-    function itemPairs(container, rangeOf, content, unseen, isRtl) {
+    // order by their BOXES: two items whose boxes share a line (overlap
+    // vertically: one flex line or one grid row band) are compared in the
+    // inline direction by their start edges, so a tall item beside a short
+    // one (align-items: center, a row-spanning grid cell) is not "above" it;
+    // otherwise above/below decides. A text run directly in the container is
+    // an anonymous item and counts too. The inline direction is the
+    // container's own.
+    function itemPairs(container, rangeOf, content, unseen) {
+      const isRtl = getComputedStyle(container).direction === 'rtl';
       const items = [];
       for (const child of childrenOf(container)) {
-        if (child.nodeType !== Node.ELEMENT_NODE || SKIP_TAGS.has(child.tagName)) continue;
-        const cs = getComputedStyle(child);
-        if (cs.display === 'none' || cs.position === 'absolute' || cs.position === 'fixed') continue;
+        let box;
+        if (child.nodeType === Node.TEXT_NODE) {
+          box = union(rectsOfText(child));
+        } else if (child.nodeType === Node.ELEMENT_NODE && !SKIP_TAGS.has(child.tagName)) {
+          const cs = getComputedStyle(child);
+          if (cs.display === 'none' || cs.position === 'absolute' || cs.position === 'fixed') continue;
+          box = child.getBoundingClientRect();
+        } else continue;
+        if (!box || !box.width || !box.height) continue;
         const [first, last] = rangeOf(child);
         if (first < 0) continue;
         let i = first;
         while (i <= last && unseen.has(i)) i++;
         if (i > last) continue;
-        items.push(content[i]);
+        items.push({ box, label: content[i].label });
       }
       const pairs = [];
       for (let k = 1; k < items.length; k++) {
-        if (compare(items[k - 1].first, items[k].first, isRtl) === 'before') pairs.push({ a: items[k - 1], b: items[k] });
+        const a = items[k - 1].box;
+        const b = items[k].box;
+        const sameLine = a.top < b.bottom - TOL && b.top < a.bottom - TOL;
+        const before = sameLine
+          ? (isRtl ? b.right > a.right + TOL : b.left < a.left - TOL)
+          : b.bottom <= a.top + TOL;
+        if (before) pairs.push({ a: items[k - 1], b: items[k] });
       }
       return pairs;
     }
@@ -513,7 +590,12 @@ if (!globalThis.__a11yCssPositionChecker) {
             if (child.nodeType !== Node.ELEMENT_NODE) continue;
             const ccs = getComputedStyle(child);
             if (ccs.order !== '0') set(child, 'order', '0');
-            if (ccs.gridRowStart !== 'auto' || ccs.gridColumnStart !== 'auto') set(child, 'grid-area', 'auto');
+            // Longhands one by one: the grid-area shorthand reads '' when the
+            // page set only some of them inline (style="grid-column: 2"), and
+            // restoring '' to the shorthand would clear the page's own value.
+            if (ccs.gridRowStart !== 'auto' || ccs.gridColumnStart !== 'auto') {
+              for (const p of ['grid-row-start', 'grid-row-end', 'grid-column-start', 'grid-column-end']) set(child, p, 'auto');
+            }
           }
         }
       } else if (!on && saved) {
@@ -532,33 +614,24 @@ if (!globalThis.__a11yCssPositionChecker) {
 
     // ------------------------------------------------------------ overlay
 
-    function box(rect, css) {
+    function box(rect, css, sx, sy) {
       const b = document.createElement('div');
       b.style.cssText =
         'position:absolute;box-sizing:border-box;pointer-events:none;' +
-        `top:${rect.top + window.scrollY}px;left:${rect.left + window.scrollX}px;` +
+        `top:${rect.top + sy}px;left:${rect.left + sx}px;` +
         `width:${Math.max(rect.width, 2)}px;height:${Math.max(rect.height, 2)}px;${css}`;
       return b;
     }
 
     // The extent is measured again at draw time: the page scrolls, and the
-    // linearize preview moves every element.
+    // linearize preview moves every element. Same content rules as the scan
+    // (walkContent), minus the visually hidden moved elements it skipped.
     function extentNow(e) {
       const rects = [e.el.getBoundingClientRect()];
-      const walker = [e.el];
-      let n = 0;
-      while (walker.length && n < 2000) {
-        const node = walker.pop();
-        n++;
-        for (const c of childrenOf(node)) {
-          if (c.nodeType === Node.TEXT_NODE) {
-            if (c.textContent.trim()) rects.push(...rectsOfText(c));
-          } else if (c.nodeType === Node.ELEMENT_NODE && !SKIP_TAGS.has(c.tagName)) {
-            if (unitName(c)) rects.push(c.getBoundingClientRect());
-            else walker.push(c);
-          }
-        }
-      }
+      walkContent(e.el, (node, r) => {
+        rects.push(...r);
+        return rects.length < MAX_ITEMS;
+      }, (el) => hiddenEls.has(el));
       return union(rects);
     }
 
@@ -567,35 +640,61 @@ if (!globalThis.__a11yCssPositionChecker) {
       if (!layer) return;
       if (!layer.isConnected) document.documentElement.appendChild(layer);
       layer.replaceChildren();
-      let n = 0;
-      const placed = []; // badge rects, so badges never cover each other
+      // Reads first, then writes: measuring between appends would force one
+      // layout per entry on every scroll frame.
+      // A page scroll moves nothing in page coordinates except content in a
+      // fixed or sticky element, so it reuses the last page extents; any
+      // other redraw (resize, a scrolling container, linearize, a scan)
+      // measures again. A page scroll also measures again when the last full
+      // measure is over 1 s old, so a layout shift with no scroll or resize
+      // (lazy images, late content, a fixed descendant) is stale for at most
+      // that long.
+      const now = performance.now();
+      const full = fullNext || now - lastFull > FULL_EVERY_MS;
+      fullNext = false;
+      if (full) lastFull = now;
+      const sx = window.scrollX;
+      const sy = window.scrollY;
+      const drawn = [];
       for (const e of entries) {
         if (!e.el.isConnected) continue;
-        const ext = extentNow(e);
-        if (!ext) continue;
-        n++;
-        const changed = e.summary.order === 'changed';
+        let ext;
+        if (!full && !e.floats && e.pageExt !== undefined) {
+          ext = e.pageExt && shift(e.pageExt, -sx, -sy);
+        } else {
+          ext = extentNow(e);
+          e.pageExt = ext && shift(ext, sx, sy);
+        }
+        if (ext) drawn.push({ e, ext });
+      }
+      for (const d of drawn) {
+        const changed = d.e.summary.order === 'changed';
         const color = changed ? COLORS.order : COLORS.ok;
-        const outline = box(ext, `outline:3px ${changed ? 'solid' : 'dashed'} ${color};outline-offset:2px;`);
-        outline.dataset.selector = e.summary.selector;
-        outline.dataset.order = e.summary.order;
+        const outline = box(d.ext, `outline:3px ${changed ? 'solid' : 'dashed'} ${color};outline-offset:2px;`, sx, sy);
+        outline.dataset.selector = d.e.summary.selector;
+        outline.dataset.order = d.e.summary.order;
         layer.appendChild(outline);
         // A number badge (the reading order of the moved elements) to the
         // left of the outline, where it covers no content; above it when
         // there is no room on the left.
-        const tag = document.createElement('div');
-        tag.textContent = String(e.summary.n);
-        tag.style.cssText =
+        d.tag = document.createElement('div');
+        d.tag.textContent = String(d.e.summary.n);
+        d.tag.style.cssText =
           'position:absolute;pointer-events:none;white-space:nowrap;text-align:center;min-width:12px;' +
           `background:${color};color:#fff;font:700 12px/16px system-ui,sans-serif;padding:1px 4px;border-radius:9px;` +
           'box-shadow:0 0 0 2px #fff;';
-        layer.appendChild(tag);
-        const w = tag.offsetWidth;
-        const h = tag.offsetHeight;
-        let left = ext.left + window.scrollX - w - 8;
-        let top = ext.top + window.scrollY;
+        layer.appendChild(d.tag);
+      }
+      for (const d of drawn) {
+        d.w = d.tag.offsetWidth; // one layout for all badges
+        d.h = d.tag.offsetHeight;
+      }
+      const placed = []; // badge rects, so badges never cover each other
+      for (const { ext, tag, w, h } of drawn) {
+        let left = ext.left + sx - w - 8;
+        let top = ext.top + sy;
         if (left < 0) {
-          left = Math.max(0, ext.left + window.scrollX);
+          left = Math.max(0, ext.left + sx);
           top = Math.max(0, top - h - 6);
         }
         for (let hit = true, guard = 0; hit && guard < 50; guard++) {
@@ -607,6 +706,7 @@ if (!globalThis.__a11yCssPositionChecker) {
         tag.style.top = `${top}px`;
         placed.push({ left, right: left + w, top, bottom: top + h });
       }
+      const n = drawn.length;
       const legend = document.createElement('div');
       legend.style.cssText =
         'position:fixed;left:8px;bottom:8px;pointer-events:none;background:#fff;color:#111;' +
@@ -623,6 +723,14 @@ if (!globalThis.__a11yCssPositionChecker) {
     }
 
     function schedule() {
+      fullNext = true;
+      if (layer && !frame) frame = requestAnimationFrame(draw);
+    }
+
+    // The page itself scrolled (target = document): a cheap redraw. A
+    // scrolling container moves the content inside it: a full one.
+    function onScroll(ev) {
+      if (ev.target !== document) fullNext = true;
       if (layer && !frame) frame = requestAnimationFrame(draw);
     }
 
@@ -635,18 +743,19 @@ if (!globalThis.__a11yCssPositionChecker) {
           'position:absolute;top:0;left:0;width:0;height:0;z-index:2147483646;pointer-events:none;';
       }
       if (!listening) {
-        window.addEventListener('scroll', schedule, { capture: true, passive: true });
+        window.addEventListener('scroll', onScroll, { capture: true, passive: true });
         window.addEventListener('resize', schedule, { passive: true });
         listening = true;
       }
       document.documentElement.dataset.a11yCssPosition = 'on';
+      fullNext = true;
       draw();
     }
 
     function hide() {
       linearize(false);
       if (listening) {
-        window.removeEventListener('scroll', schedule, { capture: true });
+        window.removeEventListener('scroll', onScroll, { capture: true });
         window.removeEventListener('resize', schedule);
         listening = false;
       }

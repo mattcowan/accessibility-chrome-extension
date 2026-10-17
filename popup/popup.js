@@ -915,10 +915,22 @@ async function execTables(entry, { draw = true } = {}) {
   const results = await callChecker('tables', arg, true);
   const tables = [];
   const findings = [];
+  let failed = 0;
   for (const r of results) {
-    if (!r.result) continue;
+    // A null result is a frame whose checker threw (the exec route nulls a
+    // subframe error), not a frame with no tables.
+    if (!r.result) {
+      failed++;
+      continue;
+    }
     tables.push(...(r.result.tables || []));
     findings.push(...(r.result.findings || []));
+  }
+  if (failed) {
+    findings.push({
+      tool: 'tables', wcag: '1.3.1', severity: 'review', selector: '(page)', snippet: '',
+      details: `The Tables check failed in ${failed} frame${failed === 1 ? '' : 's'}, so tables there were not checked. Check the tables in those frames by hand (WCAG 1.3.1, TT section 14).`,
+    });
   }
   let note = '';
   if (!ax || !ax.ok) {
@@ -1104,12 +1116,24 @@ async function execCssPosition(entry, { draw = true } = {}) {
   const results = await callChecker('cssPosition', { action: draw ? 'show' : 'scan' }, true);
   let moved = 0;
   let changed = 0;
+  let failed = 0;
   const findings = [];
   for (const r of results) {
-    if (!r.result) continue;
+    // A null result is a frame whose checker threw (the exec route nulls a
+    // subframe error), not a frame with nothing moved.
+    if (!r.result) {
+      failed++;
+      continue;
+    }
     moved += r.result.items.length;
     changed += r.result.items.filter((i) => i.order === 'changed').length;
     findings.push(...r.result.findings);
+  }
+  if (failed) {
+    findings.push({
+      tool: 'css-position', wcag: '1.3.2', severity: 'review', selector: '(page)', snippet: '',
+      details: `The CSS positioning check failed in ${failed} frame${failed === 1 ? '' : 's'}, so content positioned with CSS there was not checked. Check the reading order in those frames by hand (WCAG 1.3.2, TT 15.B).`,
+    });
   }
   const stored = await storeToolFindings('css-position', findings);
   if (draw) $('toggle-css-position-overlay').textContent = 'Hide overlay';

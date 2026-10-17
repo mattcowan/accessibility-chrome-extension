@@ -67,7 +67,32 @@
     /* Fixed: coded at the end of the page. */
     .fixed-top { position: fixed; top: 0; right: 0; background: #234; color: #fff; padding: 4px 10px; }
     .fixed-chat { position: fixed; right: 12px; bottom: 12px; }
-    .fixed-note { position: fixed; left: 12px; bottom: 12px; background: #ffd; border: 1px solid #aa8; padding: 2px 8px; font-size: .85rem; }
+    .fixed-note { position: fixed; left: 12px; bottom: 12px; background: #ffd; border: 1px solid #aa8; padding: 2px 24px 2px 8px; font-size: .85rem; }
+    /* Moved elements inside fixed ones. */
+    .note-x { position: absolute; top: 0; right: 6px; }
+    .top-logo { position: absolute; top: 100%; right: 0; background: #234; color: #fff; padding: 0 10px; }
+    chat-widget { position: fixed; left: 45%; bottom: 12px; }
+
+    /* Grid item placed by an inline style that sets only grid-column. */
+    .grid-inline { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .grid-inline .gi-later { grid-column: 2; grid-row: 1; }
+
+    /* Flex order that keeps the code order, with a tall centered item. */
+    .center-row { display: flex; align-items: center; gap: 1rem; }
+    .center-row .short { order: 1; }
+    .center-row .tall { order: 2; width: 12rem; }
+
+    /* RTL section: order that keeps the code order. */
+    .rtl-row { display: flex; gap: 1rem; }
+    .rtl-row span { order: 1; }
+
+    /* Three nested absolute elements that share one out-of-order neighbor:
+       only the outer one reports it. */
+    .nest-host { position: relative; padding-top: 2rem; }
+    .nest-host .nest { position: absolute; top: 0; left: 0; }
+
+    /* A bare text run is an anonymous flex item. */
+    .anon { display: flex; flex-direction: row-reverse; justify-content: flex-end; gap: .5rem; }
   </style>
 </head>
 <body>
@@ -184,11 +209,57 @@
     </div>
   </section>
 
-  <!-- 15–17. Fixed elements, coded last. The top one shows first when the
-       page opens, so it is out of order; the bottom ones show on every
-       screen, and only the one with a control gets a finding. -->
-  <div class="fixed-top" id="fixed-top" data-expect="review">Site menu</div>
+  <section>
+    <h2>18. Grid item placed by an inline style</h2>
+    <div class="grid-inline" id="grid-inline" data-expect="review">
+      <div class="gi-later">Coded first, shows second.</div>
+      <div id="gi-inline" style="grid-column: 1">Coded second, shows first.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>19. Flex order that keeps the code order, tall item centered</h2>
+    <div class="center-row" id="center-row" data-expect="pass">
+      <span class="short">Short item.</span>
+      <span class="tall">A tall item that wraps onto several lines, so its first line starts above the short item on its left.</span>
+    </div>
+  </section>
+
+  <section dir="rtl">
+    <h2>20. RTL section, order that keeps the code order</h2>
+    <div class="rtl-row" id="rtl-row" data-expect="pass">
+      <span>First item, on the right.</span><span>Second item, on the left.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>23. Nested positioned elements</h2>
+    <div class="nest-host">
+      <p>Neighbor text, read before the label.</p>
+      <div class="nest" id="nest-a" data-expect="review"><div class="nest" id="nest-b" data-expect="pass"><span class="nest" id="nest-c" data-expect="pass">Nested label</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>21. Text run as a flex item</h2>
+    <div class="anon" id="anon" data-expect="review">Total: <b>$12</b></div>
+  </section>
+
+  <!-- 15–17 and 22. Fixed elements, coded last. The top one shows first
+       when the page opens, so it is out of order; the bottom ones show on
+       every screen, and only the ones with a control get a finding. The
+       moved elements inside fixed ones are compared only inside them. -->
+  <div class="fixed-top" id="fixed-top" data-expect="review">Site menu<span class="top-logo" id="top-logo" data-expect="pass">Logo</span></div>
   <div class="fixed-chat" id="fixed-chat" data-expect="review"><button type="button">Chat with us</button></div>
-  <div class="fixed-note" id="fixed-note" data-expect="pass">Prices include tax.</div>
+  <div class="fixed-note" id="fixed-note" data-expect="pass">Prices include tax.<span class="note-x" id="note-x" data-expect="pass">×</span></div>
+  <chat-widget id="shadow-chat" data-expect="review"></chat-widget>
+  <script>
+    customElements.define('chat-widget', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({ mode: 'open' }).innerHTML = '<button type="button">Help</button>';
+      }
+    });
+  </script>
 </body>
 </html>

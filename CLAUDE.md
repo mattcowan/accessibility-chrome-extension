@@ -212,13 +212,31 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   and its content is never used as a neighbor. A moved element is compared with
   its nearest seen neighbors outside its subtree (prev's LAST line vs its first,
   its last vs next's FIRST: above/below wins, then the inline direction, RTL
-  aware; overlap = "covers"); a container compares its items pairwise by FIRST
-  line only (a tall grid item beside short ones must not read as "after") and
-  gives ONE finding. Fixed (decided by Matt 2026-10-16): center in the top half of
+  aware from the computed direction of the element's parent — a `dir="rtl"`
+  section can sit on an LTR page; overlap = "covers"); a container compares its
+  items (element children AND bare text runs, which are anonymous flex items)
+  pairwise by their BOXES — boxes that overlap vertically share a line and are
+  compared by inline start edge in the container's own direction (a tall centered
+  item or a row-spanning grid cell is not "above" its neighbor), else above/below —
+  and gives ONE finding. Fixed (decided by Matt 2026-10-16): center in the top half of
   the window → its rects are shifted by −scroll and compared as at scroll 0 (a
   header coded last); lower → no order check, `review` only when it holds a visible
-  control (`pinned`), else outline only; content inside a fixed element is never a
-  neighbor. Always `review`. Why not trust ANDI: Chrome returns used px,
+  control (`pinned`; the host's own open shadow root is searched too), else outline
+  only; content inside a fixed element is never a neighbor of outside content. A
+  moved element INSIDE a fixed one is compared only with content inside that fixed
+  element (they scroll together, no shift), and gets no check at all inside a
+  bottom-fixed one. Ancestor lookups (fixed ancestor, nested dedupe) use one
+  tree-order stack over the seen entries (`up` = nearest seen ancestor entry); the
+  dedupe filters against EVERY moved ancestor's UNFILTERED issues (`raw`) — against
+  the nearest one's filtered list, A ⊃ B ⊃ C sharing a neighbor made C repeat A
+  (peer review 2026-10-16). The overlay re-measures on resize, linearize, a scan
+  and a scroll inside a container; a PAGE scroll (target `document`) reuses each
+  entry's page-coordinate extent unless it `floats` (fixed or sticky
+  ancestor-or-self) or the last full measure is over 1 s old (`FULL_EVERY_MS`:
+  bounds staleness from layout shifts and fixed DESCENDANTS, which `floats` does
+  not see). Scan and overlay share one content walk
+  (`walkContent`: aria-hidden, display, visibility and unit rules), and the overlay
+  skips the visually hidden moved elements the scan skipped. Always `review`. Why not trust ANDI: Chrome returns used px,
   never `auto`, for top/left/bottom/right on relative/absolute/fixed elements with
   no offset (verified 2026-10-16, Chromium 149), so ANDI's offset filter marks
   every one of them; and its glow is a box-shadow on the element's own box, which a
@@ -227,7 +245,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   overlays) outlines the union of the element and its content, re-measured at each
   draw; badges = reading-order number, placed left of the outline. Linearize
   (marker `data-a11y-linearize`) sets inline `!important` (beats the page's own
-  inline `!important`) and restores the saved inline values newest-first; a scan
+  inline `!important`) and restores the saved inline values newest-first, one
+  LONGHAND at a time (the `grid-area` shorthand reads '' when the page set only
+  `grid-column` inline, and restoring '' would wipe it — peer review 2026-10-16); a scan
   while linearized undoes it, measures, and re-applies; hide ends it.
 - `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
   batchable) — group with no group label is `fail`, `review` when a member has
@@ -418,7 +438,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when Matt says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 421 checks on 2026-10-16 after CSS positioning (#29, +34): 370 in the default (muted) run + 51 with `--audio`. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 432 checks on 2026-10-16 after CSS positioning (#29, +45) and its peer review: 381 in the default (muted) run + 51 with `--audio` (the audio count is from the run before the review; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
