@@ -240,9 +240,14 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   (`sameLine`) = vertical overlap ≥ half the shorter box; otherwise vertical
   centers decide — with a fixed 2px tolerance, a block nudged up 5px read as
   "covers" the line above (PR #30 review). Off page (`visuallyHidden`) is measured
-  against the window for a fixed element or anything inside one (`floats(el,
-  ['fixed'])` — NOT sticky: a sticky header further down is reached by scrolling;
-  a child pushed below a bottom-fixed bar can never be) and against the root box
+  against the window for a fixed element or anything inside one (`fixedFrame` —
+  NOT sticky: a sticky header further down is reached by scrolling; a child pushed
+  below a bottom-fixed bar can never be), EXCEPT when a box between the element and
+  the fixed ancestor (the fixed element's own `overflow: auto` included) scrolls:
+  then it is never off page (a drawer's content is reached by scrolling the drawer;
+  dropping it would lose a review — PR #30 round 3). The top/bottom pin comes from
+  the fixed element's OWN box, not the content union (a scrolling drawer's content
+  reaches far below the window and read as bottom-pinned). Otherwise the root box
   otherwise (its scroll area always contains the window, so in-view content never
   reads as off page): in
   an RTL page `scrollX` is negative and the scrollable area grows LEFT of the root
@@ -450,7 +455,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when Matt says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 434 checks on 2026-10-17 after CSS positioning (#29, +47) and two PR #30 review rounds: 383 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 436 checks on 2026-10-17 after CSS positioning (#29, +49) and three PR #30 review rounds: 385 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

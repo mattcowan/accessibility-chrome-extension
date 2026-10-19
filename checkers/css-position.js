@@ -246,12 +246,16 @@ if (!globalThis.__a11yCssPositionChecker) {
       // Outside the area anyone can scroll to. A fixed element, and anything
       // inside one (a child pushed below a bottom-fixed bar never scrolls
       // into view), lives in the window. Not sticky: a sticky header further
-      // down the page is reached by scrolling. Anything else is measured
-      // against the root box, which moves with the scroll; in an RTL page the
-      // scrollable area grows to the LEFT of the root box (scrollX is
-      // negative there), so a plain "x + scrollX < 0" test would hide
-      // visible content.
-      if (floats(el, ['fixed'])) {
+      // down the page is reached by scrolling. But content in a scrolling box
+      // inside the fixed element (a drawer with overflow: auto) is reached by
+      // scrolling that box, so it is never off page: missing it would drop a
+      // review. Anything else is measured against the root box, which moves
+      // with the scroll; in an RTL page the scrollable area grows to the
+      // LEFT of the root box (scrollX is negative there), so a plain
+      // "x + scrollX < 0" test would hide visible content.
+      const frame = fixedFrame(el);
+      if (frame === 'scrolls') return false;
+      if (frame === 'window') {
         return ext.right <= 0 || ext.bottom <= 0 || ext.left >= window.innerWidth || ext.top >= window.innerHeight;
       }
       const root = document.documentElement;
@@ -283,12 +287,31 @@ if (!globalThis.__a11yCssPositionChecker) {
 
     // True when el or an ancestor is fixed or sticky: it moves in page
     // coordinates when the window scrolls.
-    function floats(el, kinds = ['fixed', 'sticky']) {
+    function floats(el) {
       for (let n = el; n && n.nodeType === Node.ELEMENT_NODE; ) {
-        if (kinds.includes(getComputedStyle(n).position)) return true;
+        const p = getComputedStyle(n).position;
+        if (p === 'fixed' || p === 'sticky') return true;
         n = n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
       }
       return false;
+    }
+
+    // 'window' = el is fixed or inside a fixed element with no scrolling box
+    // between them; 'scrolls' = inside a fixed element, but a box between
+    // them scrolls; 'page' = not inside a fixed element.
+    const SCROLLS = /^(auto|scroll|overlay)$/;
+    function fixedFrame(el) {
+      let scrolls = false;
+      for (let n = el; n && n.nodeType === Node.ELEMENT_NODE; ) {
+        const cs = getComputedStyle(n);
+        if (cs.position === 'fixed') return scrolls ? 'scrolls' : 'window';
+        n = n.assignedSlot || n.parentElement || (n.parentNode && n.parentNode.host) || null;
+        if (n && n.nodeType === Node.ELEMENT_NODE) {
+          const ps = getComputedStyle(n);
+          if (SCROLLS.test(ps.overflowY) || SCROLLS.test(ps.overflowX)) scrolls = true;
+        }
+      }
+      return 'page';
     }
 
     function shift(r, dx, dy) {
@@ -446,8 +469,11 @@ if (!globalThis.__a11yCssPositionChecker) {
           let start = inside[0].first;
           let end = inside[inside.length - 1].last;
           if (m.move === 'fixed' && !fixedUp) {
+            // From its own box, not the content union: a drawer that scrolls
+            // inside has content far below the window edge.
             const vh = window.innerHeight;
-            const mid = (m.ext.top + m.ext.bottom) / 2;
+            const own = m.el.getBoundingClientRect();
+            const mid = (own.top + own.bottom) / 2;
             m.pin = mid < vh / 2 ? 'top' : 'bottom';
             if (m.pin === 'bottom') {
               // Bottom or side: it shows on every screen, so code order says

@@ -72,6 +72,12 @@
     .note-x { position: absolute; top: 0; right: 6px; }
     .top-logo { position: absolute; top: 100%; right: 0; background: #234; color: #fff; padding: 0 10px; }
     chat-widget { position: fixed; left: 45%; bottom: 12px; }
+    /* A top-pinned fixed drawer that scrolls inside: its content far below
+       the window edge is reached by scrolling the drawer. */
+    .drawer { position: fixed; top: 48px; right: 0; width: 170px; height: 30vh; overflow: auto; background: #f4f4ff; border: 1px solid #99a; font-size: .85rem; }
+    .drawer .spacer { height: 150vh; }
+    .drawer .card { position: relative; padding-top: 1.4rem; }
+    .drawer .card b { position: absolute; top: 0; left: 0; }
 
     /* Grid item placed by an inline style that sets only grid-column. */
     .grid-inline { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
@@ -278,6 +284,13 @@
   <div class="fixed-chat" id="fixed-chat" data-expect="review"><button type="button">Chat with us</button></div>
   <div class="fixed-note" id="fixed-note" data-expect="pass">Prices include tax.<span class="note-x" id="note-x" data-expect="pass">×</span></div>
   <chat-widget id="shadow-chat" data-expect="review"></chat-widget>
+  <!-- 26. The drawer is top-fixed and coded last (out of order, like the
+       header). The price far down inside it is out of order too, and must
+       be compared, not dropped as off page. -->
+  <div class="drawer" id="drawer" data-expect="review">Drawer
+    <div class="spacer"></div>
+    <div class="card"><span>Green mug</span><b id="drawer-price" data-expect="review">$9</b></div>
+  </div>
   <script>
     customElements.define('chat-widget', class extends HTMLElement {
       constructor() {
