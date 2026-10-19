@@ -471,10 +471,13 @@ if (!globalThis.__a11yCssPositionChecker) {
           if (m.move === 'fixed' && !fixedUp) {
             // From its own box, not the content union: a drawer that scrolls
             // inside has content far below the window edge.
+            // A box nearly as tall as the window (a full-height sidebar) is a
+            // side panel: decided on purpose, because its midpoint sits on
+            // vh / 2 and rounding would pick top or bottom at random.
             const vh = window.innerHeight;
             const own = m.el.getBoundingClientRect();
             const mid = (own.top + own.bottom) / 2;
-            m.pin = mid < vh / 2 ? 'top' : 'bottom';
+            m.pin = own.height < vh * 0.9 && mid < vh / 2 ? 'top' : 'bottom';
             if (m.pin === 'bottom') {
               // Bottom or side: it shows on every screen, so code order says
               // nothing about where it "is". It matters when it holds a

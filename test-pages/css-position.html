@@ -78,6 +78,8 @@
     .drawer .spacer { height: 150vh; }
     .drawer .card { position: relative; padding-top: 1.4rem; }
     .drawer .card b { position: absolute; top: 0; left: 0; }
+    /* A full-height side strip: a side panel, so only its control counts. */
+    .side-nav { position: fixed; top: 0; right: 0; width: 36px; height: 100vh; background: #dde; font-size: .7rem; }
 
     /* Grid item placed by an inline style that sets only grid-column. */
     .grid-inline { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
@@ -291,6 +293,9 @@
     <div class="spacer"></div>
     <div class="card"><span>Green mug</span><b id="drawer-price" data-expect="review">$9</b></div>
   </div>
+  <!-- 27. A full-height fixed side strip with a link: a side panel (pinned
+       review for its control), not a top-pinned element. -->
+  <nav class="side-nav" id="side-nav" data-expect="review"><a href="#">Top</a></nav>
   <script>
     customElements.define('chat-widget', class extends HTMLElement {
       constructor() {
