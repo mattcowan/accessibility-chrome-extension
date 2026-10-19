@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CSS positioning (TT 15.B)</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 900px; }
+    section { border: 1px solid #ccc; padding: 1rem; margin: 0 0 1.5rem; }
+    h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
+    .note { color: #555; font-size: .9rem; }
+
+    /* Steps: step 2 is first in the code, but CSS puts step 1 above it. */
+    .steps { position: relative; height: 5rem; }
+    .steps p { position: absolute; left: 0; margin: 0; }
+    .steps .s1 { top: 0; }
+    .steps .s2 { top: 2.5rem; }
+
+    /* Price shows before the product name but comes after it in the code. */
+    .product { position: relative; padding-top: 2rem; }
+    .product .price { position: absolute; top: 0; left: 0; font-weight: 700; }
+
+    /* A relative wrapper with no offset moves nothing. */
+    .wrapper { position: relative; }
+
+    /* A caption drawn over an informative image. */
+    .figure { position: relative; width: 300px; }
+    .figure img { display: block; }
+    .figure .caption { position: absolute; left: 8px; bottom: 8px; background: #000c; color: #fff; padding: 2px 6px; }
+
+    /* Text over a decorative image: the image is not read. */
+    .hero { position: relative; width: 300px; }
+    .hero img { display: block; }
+    .hero .over { position: absolute; top: 8px; left: 8px; color: #fff; background: #0008; padding: 2px 6px; }
+
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    .skip { position: absolute; left: -9999px; }
+
+    /* The sidebar is first in the code but floats to the right of the text. */
+    .layout::after { content: ""; display: block; clear: both; }
+    .layout aside { float: right; width: 200px; background: #eef; padding: .5rem; }
+
+    /* Placed where it reads: below the label it follows. */
+    .hint-wrap { position: relative; padding-bottom: 2rem; }
+    .hint { position: absolute; left: 0; bottom: 0; font-size: .9rem; color: #333; }
+
+    /* A 2px nudge to line an icon up with the text. */
+    .nudge { position: relative; top: 2px; }
+
+    /* The positioned wrapper collapses to zero height; its image overflows.
+       ANDI's box-shadow glow goes around the empty box, not the image. */
+    .collapsed-host { position: relative; height: 140px; }
+    .collapsed { position: absolute; top: 0; left: 0; height: 0; }
+
+    /* Flex and grid reordering (WCAG C27). */
+    .row-reverse { display: flex; flex-direction: row-reverse; justify-content: flex-end; gap: 1rem; }
+    .ordered { display: flex; gap: 1rem; }
+    .ordered .first { order: -1; }
+    .grid-same { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .grid-same .a { grid-column: 1; grid-row: 1 / span 2; }
+    .grid-same .b { grid-column: 2; grid-row: 1; }
+    .grid-same .c { grid-column: 2; grid-row: 2; }
+    .grid-swap { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .grid-swap .later { grid-column: 1; grid-row: 1; }
+    .grid-swap .sooner { grid-column: 2; grid-row: 1; }
+
+    /* Fixed: coded at the end of the page. */
+    .fixed-top { position: fixed; top: 0; right: 0; background: #234; color: #fff; padding: 4px 10px; }
+    .fixed-chat { position: fixed; right: 12px; bottom: 12px; }
+    .fixed-note { position: fixed; left: 12px; bottom: 12px; background: #ffd; border: 1px solid #aa8; padding: 2px 24px 2px 8px; font-size: .85rem; }
+    /* Moved elements inside fixed ones. */
+    .note-x { position: absolute; top: 0; right: 6px; }
+    .top-logo { position: absolute; top: 100%; right: 0; background: #234; color: #fff; padding: 0 10px; }
+    chat-widget { position: fixed; left: 45%; bottom: 12px; }
+    /* A top-pinned fixed drawer that scrolls inside: its content far below
+       the window edge is reached by scrolling the drawer. */
+    .drawer { position: fixed; top: 48px; right: 0; width: 170px; height: 30vh; overflow: auto; background: #f4f4ff; border: 1px solid #99a; font-size: .85rem; }
+    .drawer .spacer { height: 150vh; }
+    .drawer .card { position: relative; padding-top: 1.4rem; }
+    .drawer .card b { position: absolute; top: 0; left: 0; }
+    /* A full-height side strip: a side panel, so only its control counts. */
+    .side-nav { position: fixed; top: 0; right: 0; width: 36px; height: 100vh; background: #dde; font-size: .7rem; }
+
+    /* Grid item placed by an inline style that sets only grid-column. */
+    .grid-inline { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+    .grid-inline .gi-later { grid-column: 2; grid-row: 1; }
+
+    /* Flex order that keeps the code order, with a tall centered item. */
+    .center-row { display: flex; align-items: center; gap: 1rem; }
+    .center-row .short { order: 1; }
+    .center-row .tall { order: 2; width: 12rem; }
+
+    /* Flex order that swaps a short item before a tall centered one. */
+    .center-swap { display: flex; align-items: center; gap: 1rem; }
+    .center-swap .tall { width: 12rem; }
+    .center-swap .short { order: -1; }
+
+    /* RTL section: order that keeps the code order. */
+    .rtl-row { display: flex; gap: 1rem; }
+    .rtl-row span { order: 1; }
+
+    /* Three nested absolute elements that share one out-of-order neighbor:
+       only the outer one reports it. */
+    .nest-host { position: relative; padding-top: 2rem; }
+    .nest-host .nest { position: absolute; top: 0; left: 0; }
+
+    /* A block nudged up 5 px into the line above (optical alignment). */
+    .nudge-host div { margin: 0; }
+    .nudge-host .nudge-block { position: relative; top: -5px; }
+
+    /* A bare text run is an anonymous flex item. */
+    .anon { display: flex; flex-direction: row-reverse; justify-content: flex-end; gap: .5rem; }
+  </style>
+</head>
+<body>
+  <h1>CSS positioning (TT 15.B)</h1>
+  <p class="note">Fixture for the CSS positioning checker (WCAG 1.3.2, Trusted Tester 15.B). Each case carries <code>data-expect</code>: <code>review</code> = shows out of reading order, <code>pass</code> = no finding.</p>
+
+  <section>
+    <h2>1. Steps in the wrong code order</h2>
+    <div class="steps">
+      <p class="s2" id="step2" data-expect="review">Step 2: Click Save.</p>
+      <p class="s1" id="step1" data-expect="review">Step 1: Type your name.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Price before the product name</h2>
+    <div class="product">
+      <strong>Blue mug</strong>
+      <span class="price" id="price" data-expect="review">$12</span>
+    </div>
+    <p>Ships in two days.</p>
+  </section>
+
+  <section>
+    <h2>3. Relative wrapper with no offset</h2>
+    <div class="wrapper" id="wrapper" data-expect="pass">
+      <p>This text is in a wrapper with position: relative and no offset. Nothing moves.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Caption over an informative image</h2>
+    <div class="figure">
+      <img alt="Bar chart of sales by month" width="300" height="140" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='140'%3E%3Crect width='300' height='140' fill='%23cde'/%3E%3Crect x='20' y='60' width='40' height='80' fill='%2369c'/%3E%3Crect x='80' y='30' width='40' height='110' fill='%2369c'/%3E%3C/svg%3E">
+      <span class="caption" id="caption" data-expect="review">Sales rose in March</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>5. Text over a decorative image</h2>
+    <div class="hero">
+      <img alt="" width="300" height="100" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='100'%3E%3Crect width='300' height='100' fill='%23864'/%3E%3C/svg%3E">
+      <span class="over" id="hero-text" data-expect="pass">Welcome</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. Visually hidden text</h2>
+    <a href="#main" class="skip" id="skip" data-expect="pass">Skip to content</a>
+    <button type="button">Delete <span class="sr-only" id="sr" data-expect="pass">the March report</span></button>
+  </section>
+
+  <section>
+    <h2>7. Sidebar first in the code, floated right</h2>
+    <div class="layout">
+      <aside id="aside" data-expect="review">Related: How to return an item.</aside>
+      <p>Main text of the article. It is after the sidebar in the code, but it shows on the left.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>8. Positioned where it reads</h2>
+    <div class="hint-wrap">
+      <label for="email">Email</label> <input id="email" type="email">
+      <span class="hint" id="hint" data-expect="pass">We never share your email.</span>
+    </div>
+    <p>Text after the field.</p>
+  </section>
+
+  <section>
+    <h2>9. Small nudge</h2>
+    <p>Saved <span class="nudge" id="nudge" data-expect="pass">✓</span> just now.</p>
+  </section>
+
+  <section>
+    <h2>10. Collapsed positioned wrapper</h2>
+    <p>The chart below is inside a positioned wrapper that has no height.</p>
+    <div class="collapsed-host">
+      <div class="collapsed" id="collapsed" data-expect="pass">
+        <img alt="Pie chart of costs" width="140" height="140" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Ccircle cx='70' cy='70' r='60' fill='%23c84'/%3E%3C/svg%3E">
+      </div>
+    </div>
+    <p>Text after the chart.</p>
+  </section>
+
+  <section>
+    <h2>11. Flex row-reverse</h2>
+    <div class="row-reverse" id="row-reverse" data-expect="review">
+      <span>First</span><span>Second</span><span>Third</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>12. Flex order</h2>
+    <div class="ordered" id="ordered" data-expect="review">
+      <span>Then press Submit.</span><span class="first">Fill in the form.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>13. Grid placement that keeps the code order</h2>
+    <div class="grid-same" id="grid-same" data-expect="pass">
+      <div class="a">A tall block of text on the left that wraps onto several lines in its grid cell, taller than the two cells beside it.</div>
+      <div class="b">B, top right.</div>
+      <div class="c">C, bottom right.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>14. Grid placement that swaps the order</h2>
+    <div class="grid-swap" id="grid-swap" data-expect="review">
+      <div class="sooner">Read this first in the code.</div>
+      <div class="later">But this shows first.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>18. Grid item placed by an inline style</h2>
+    <div class="grid-inline" id="grid-inline" data-expect="review">
+      <div class="gi-later">Coded first, shows second.</div>
+      <div id="gi-inline" style="grid-column: 1">Coded second, shows first.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>19. Flex order that keeps the code order, tall item centered</h2>
+    <div class="center-row" id="center-row" data-expect="pass">
+      <span class="short">Short item.</span>
+      <span class="tall">A tall item that wraps onto several lines, so its first line starts above the short item on its left.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>25. Flex order that swaps a short item before a tall centered one</h2>
+    <div class="center-swap" id="center-swap" data-expect="review">
+      <span class="tall">A tall item that wraps onto several lines; it is first in the code but shows second.</span>
+      <span class="short">Short item, shown first.</span>
+    </div>
+  </section>
+
+  <section dir="rtl">
+    <h2>20. RTL section, order that keeps the code order</h2>
+    <div class="rtl-row" id="rtl-row" data-expect="pass">
+      <span>First item, on the right.</span><span>Second item, on the left.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>23. Nested positioned elements</h2>
+    <div class="nest-host">
+      <p>Neighbor text, read before the label.</p>
+      <div class="nest" id="nest-a" data-expect="review"><div class="nest" id="nest-b" data-expect="pass"><span class="nest" id="nest-c" data-expect="pass">Nested label</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>24. Block nudged up a few pixels</h2>
+    <div class="nudge-host">
+      <div>First block, no margin.</div>
+      <div class="nudge-block" id="nudge-block" data-expect="pass">Second block, nudged up 5 px into the first.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>21. Text run as a flex item</h2>
+    <div class="anon" id="anon" data-expect="review">Total: <b>$12</b></div>
+  </section>
+
+  <!-- 15–17 and 22. Fixed elements, coded last. The top one shows first
+       when the page opens, so it is out of order; the bottom ones show on
+       every screen, and only the ones with a control get a finding. The
+       moved elements inside fixed ones are compared only inside them. -->
+  <div class="fixed-top" id="fixed-top" data-expect="review">Site menu<span class="top-logo" id="top-logo" data-expect="pass">Logo</span></div>
+  <div class="fixed-chat" id="fixed-chat" data-expect="review"><button type="button">Chat with us</button></div>
+  <div class="fixed-note" id="fixed-note" data-expect="pass">Prices include tax.<span class="note-x" id="note-x" data-expect="pass">×</span></div>
+  <chat-widget id="shadow-chat" data-expect="review"></chat-widget>
+  <!-- 26. The drawer is top-fixed and coded last (out of order, like the
+       header). The price far down inside it is out of order too, and must
+       be compared, not dropped as off page. -->
+  <div class="drawer" id="drawer" data-expect="review">Drawer
+    <div class="spacer"></div>
+    <div class="card"><span>Green mug</span><b id="drawer-price" data-expect="review">$9</b></div>
+  </div>
+  <!-- 27. A full-height fixed side strip with a link: a side panel (pinned
+       review for its control), not a top-pinned element. -->
+  <nav class="side-nav" id="side-nav" data-expect="review"><a href="#">Top</a></nav>
+  <script>
+    customElements.define('chat-widget', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({ mode: 'open' }).innerHTML = '<button type="button">Help</button>';
+      }
+    });
+  </script>
+</body>
+</html>

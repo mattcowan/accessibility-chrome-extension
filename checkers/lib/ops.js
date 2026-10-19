@@ -46,6 +46,8 @@ if (!globalThis.__a11yOps) {
         inputWatcher: ds.a11yInputWatcher === 'on',
         liveMonitor: ds.a11yLiveMonitor === 'on',
         tables: ds.a11yTables === 'on',
+        cssPosition: ds.a11yCssPosition === 'on',
+        linearize: ds.a11yLinearize === 'on',
         autoUpdate: ds.a11yAutoUpdate || null, // 'watching' | 'done' | null
       };
     },

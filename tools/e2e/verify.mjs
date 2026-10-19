@@ -5,7 +5,9 @@
 //
 // Run from the repo root (needs the scanner's Playwright install first:
 // `cd tools/keyboard-trap-scan && npm ci`):
-//   node tools/e2e/verify.mjs
+//   node tools/e2e/verify.mjs          all but the audio sections, muted
+//   node tools/e2e/verify.mjs --audio  only the audio sections (plays sound)
+//   node tools/e2e/verify.mjs --all    both
 // Prints PASS/FAIL per check and "N/M passed"; exits 1 on any failure.
 //
 // Coverage today: motion 2.2.2 / TT 2.B mechanisms, the audio checker
@@ -18,7 +20,8 @@
 // labels (5.C), error capture (5.F / 5.G) and the input watcher (5.D / 5.E),
 // where the test plays the tester with real clicks, keys and selects, and
 // the Tables checker (1.3.1 / TT section 14: guess, Chrome role, header
-// algorithm, overlay, the tester's saved choice). Older checkers (text spacing, target size, focus, hover, reflow,
+// algorithm, overlay, the tester's saved choice), and CSS positioning
+// (1.3.2 / TT 15.B: order check, overlay, Linearize). Older checkers (text spacing, target size, focus, hover, reflow,
 // accname, live regions) are not covered yet; add a section per checker.
 //
 // How it works (see CLAUDE.md "Verify changes" for the gotchas):
@@ -74,7 +77,18 @@ function check(name, ok, info = '') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function launch(policy, { panel = false } = {}) {
+// The audio checker sections play real sound, so they run only on request:
+//   (no flag)  every section except the audio ones; all browsers muted
+//   --audio    only the audio sections, with sound
+//   --all      both
+const ARGS = new Set(process.argv.slice(2));
+const RUN_AUDIO = ARGS.has('--audio') || ARGS.has('--all');
+const RUN_SILENT = !ARGS.has('--audio');
+
+// sound: false adds --mute-audio (Chromium mutes all output; autoplay policy
+// and the media elements' own state are unchanged, so the #15 play() probe
+// still sees NotAllowedError).
+async function launch(policy, { panel = false, sound = false } = {}) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'a11y-e2e-'));
   // Throwaway profile: delete it when the browser closes.
   const removeProfile = () => {
@@ -90,6 +104,7 @@ async function launch(policy, { panel = false } = {}) {
       `--disable-extensions-except=${STAGE}`,
       `--load-extension=${STAGE}`,
       `--autoplay-policy=${policy}`,
+      ...(sound ? [] : ['--mute-audio']),
     ],
   });
   ctx.on('close', removeProfile);
@@ -190,8 +205,9 @@ async function assertPage(env, label, file, { tool, buttonId, attr, wcag, only, 
   return findings;
 }
 
-try {
-  // ======================= autoplay ALLOWED =======================
+// Everything that needs no audible output. Browsers launch muted.
+async function silentSections() {
+  // ======================= motion (autoplay allowed) =======================
   let env = await launch('no-user-gesture-required');
 
   // #3 — motion 2.B mechanisms (videos only; other motion.html cases depend on RM emulation).
@@ -209,64 +225,9 @@ try {
     await page.close();
   }
 
-  // #10 — audio, playing case.
-  // 5 s wait: #over (3.5 s clip) must have ended, so its plain-Run grade is stable.
-  await assertPage(env, '[audio allowed]', 'audio-autoplay.html', { tool: 'audio', buttonId: 'run-audio', wcag: '1.4.2', waitMs: 5000 });
-  await assertPage(env, '[audio allowed]', 'audio-pause-first.html', { tool: 'audio', buttonId: 'run-audio', wcag: '1.4.2' });
-  await assertPage(env, '[audio allowed]', 'audio-script.html', { tool: 'audio', buttonId: 'run-audio', wcag: '1.4.2' });
-
-  // Batch includes audio.
-  {
-    const { page, tabId } = await openFixture(env, 'audio-pause-first.html');
-    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
-    await env.popup.evaluate(() => {
-      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'audio' || b.dataset.batchId === 'motion';
-    });
-    await clickAndWait(env, 'run-selected', /^Batch complete/);
-    const f = await storedFindings(env, tabId, 'audio');
-    check('[batch] Run selected runs the audio checker', f.length >= 1, JSON.stringify(f));
-    await page.close();
-  }
-  // Reload and record with autoplay allowed: the hook proves the script
-  // started #scripted with no user action, so it is a definite fail.
-  {
-    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
-    await clickAndWait(env, 'record-audio', /after a recorded reload/);
-    const f = await storedFindings(env, tabId, 'audio');
-    for (const id of ['#scripted', '#delayed', '#over']) {
-      const got = severityFor(f, id, '1.4.2');
-      check(`[audio allowed recorded] audio-autoplay.html ${id} → fail`, got === 'fail', `got ${got}: ${JSON.stringify(f.map((x) => [x.severity, x.selector]))}`);
-    }
-    const banner = await env.popup.evaluate(() => document.getElementById('banner').textContent);
-    check('[audio allowed recorded] no "recorder did not run" banner', !/recorder did not run/i.test(banner), banner);
-    await page.close();
-  }
-  // Plain Run after a 3.5 s autoplay clip has ended: still reported (never
-  // silently missed), capped at review without a recording (PR #16 review).
-  {
-    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 6000);
-    await clickAndWait(env, 'run-audio', /^audio: \d+ findings/);
-    const f = await storedFindings(env, tabId, 'audio');
-    const got = severityFor(f, '#over', '1.4.2');
-    check('[audio allowed late] ended 3.5 s autoplay #over → review (no recording)', got === 'review', `got ${got}`);
-    await page.close();
-  }
-  // Without Reload and record, the checker must report that no hook ran.
-  {
-    const { page, tabId } = await openFixture(env, 'audio-pause-first.html', 500);
-    const hooked = await env.popup.evaluate(async (tabId) => {
-      for (const file of ['checkers/lib/selector.js', 'checkers/lib/findings.js', 'checkers/lib/accname.js', 'checkers/lib/mechanism.js', 'checkers/audio-check.js']) {
-        await chrome.scripting.executeScript({ target: { tabId }, files: [file] });
-      }
-      const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.__a11yCheckers.audio().hooked });
-      return r.result;
-    }, tabId);
-    check('[handshake] plain page reports hooked: false', hooked === false, String(hooked));
-    await page.close();
-  }
   await env.ctx.close();
 
-  // ======================= autoplay BLOCKED =======================
+  // ======================= #15 (autoplay blocked) =======================
   env = await launch('document-user-activation-required');
   // #15: no checker path gives the page user activation. Each step is a real
   // click on the popup (so the popup has transient activation when it sends
@@ -319,109 +280,6 @@ try {
     check('[#15] control: a real page click gives activation (the probe works)', clicked.active === true, JSON.stringify(clicked));
     const overlay = await page.evaluate(() => document.querySelectorAll('#__a11y-overlay > *').length);
     check('[#15] reveal and Highlight all drew on the page through the SW route', overlay > 0, `overlay children: ${overlay}`);
-    await page.close();
-  }
-  for (const file of ['audio-autoplay.html', 'audio-pause-first.html', 'audio-script.html']) {
-    await assertPage(env, '[audio blocked]', file, { tool: 'audio', buttonId: 'run-audio', attr: 'data-expect-blocked', wcag: '1.4.2' });
-  }
-  for (const file of ['audio-autoplay.html', 'audio-script.html']) {
-    await assertPage(env, '[audio recorded]', file, { tool: 'audio', attr: 'data-expect-recorded', wcag: '1.4.2', recorded: true });
-  }
-  // Review item 4: play() blocked on load, then the USER starts it from the
-  // native controls (a real click; no JS play()). Must not report as autoplay.
-  {
-    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
-    await clickAndWait(env, 'record-audio', /after a recorded reload/);
-    const [sw] = env.ctx.serviceWorkers();
-    // Gesture-free (SW) injection: give #scripted native controls.
-    await sw.evaluate(async (tabId) => {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          const el = document.getElementById('scripted');
-          el.controls = true;
-          el.scrollIntoView({ block: 'center' });
-        },
-      });
-    }, tabId);
-    await page.bringToFront();
-    await sleep(300);
-    const box = await page.locator('#scripted').boundingBox();
-    await page.mouse.click(box.x + 20, box.y + box.height / 2); // native play button
-    await sleep(1500);
-    const playingNow = await sw.evaluate(async (tabId) => {
-      const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => !document.getElementById('scripted').paused });
-      return r.result;
-    }, tabId);
-    check('[item 4] native-controls click started #scripted', playingNow, 'still paused — click missed the play button');
-    await env.popup.reload();
-    await sleep(500);
-    await clickAndWait(env, 'run-audio', /^audio: \d+ findings/);
-    const f = await storedFindings(env, tabId, 'audio');
-    const got = severityFor(f, '#scripted', '1.4.2');
-    check('[item 4] user-started #scripted after blocked play() → pass', got === 'pass', `got ${got}: ${JSON.stringify(f.filter((x) => x.selector === '#scripted').map((x) => x.details.slice(0, 80)))}`);
-    await page.close();
-  }
-  // PR #16 review item 3: a second recordAudio on the same tab is refused.
-  {
-    const { page, tabId } = await openFixture(env, 'audio-script.html', 500);
-    const [a, b] = await env.popup.evaluate(
-      (tabId) =>
-        Promise.all([
-          chrome.runtime.sendMessage({ type: 'recordAudio', tabId }),
-          chrome.runtime.sendMessage({ type: 'recordAudio', tabId }),
-        ]),
-      tabId
-    );
-    const oks = [a, b].filter((r) => r && r.ok).length;
-    const refused = [a, b].find((r) => r && !r.ok);
-    check('[concurrent] exactly one recordAudio runs', oks === 1, JSON.stringify([a, b]));
-    check('[concurrent] the other is refused as already running', !!refused && /already running/.test(refused.error), JSON.stringify(refused));
-    await page.close();
-  }
-  // Reload and record must leave the debugger detached when no emulation is on.
-  {
-    const { page, tabId } = await openFixture(env, 'audio-script.html', 500);
-    await clickAndWait(env, 'record-audio', /after a recorded reload/);
-    // Playwright's own CDP session makes getTargets() report attached:true, so
-    // check the extension's stored state (detachIfIdle clears it on detach).
-    const state = await env.popup.evaluate(
-      async (tabId) => (await chrome.storage.session.get(`tab:${tabId}`))[`tab:${tabId}`] || null,
-      tabId
-    );
-    check('[recorded] extension detached after Reload and record', !state || !state.attached, JSON.stringify(state));
-    // A later reload is not hooked (script removed).
-    await page.reload();
-    await sleep(1000);
-    const hooked = await page.evaluate(() => !!window.__a11yAudioHook);
-    check('[recorded] hook not installed on the next reload', !hooked, 'hook present after plain reload');
-    await page.close();
-  }
-  await env.ctx.close();
-
-  // ============ autoplay BLOCKED, SIDE PANEL context (review item 2) ============
-  env = await launch('document-user-activation-required', { panel: true });
-  {
-    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
-    // Watch for the record button re-enabling before the cycle finishes.
-    await env.popup.evaluate(() => {
-      window.__enabledEarly = false;
-      const b = document.getElementById('record-audio');
-      new MutationObserver(() => {
-        const done = /after a recorded reload/.test(document.getElementById('status').textContent);
-        if (!b.disabled && !done) window.__enabledEarly = true;
-      }).observe(b, { attributes: true, attributeFilter: ['disabled'] });
-    });
-    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
-    await clickAndWait(env, 'record-audio', /after a recorded reload/);
-    const early = await env.popup.evaluate(() => window.__enabledEarly);
-    check('[panel recorded] record button stays disabled for the whole cycle', !early, 'button re-enabled mid-cycle');
-    const f = await storedFindings(env, tabId, 'audio');
-    const exps = await expectations(env, tabId, 'data-expect-recorded');
-    for (const e of exps) {
-      const got = severityFor(f, e.sel, '1.4.2');
-      check(`[panel recorded] audio-autoplay.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}`);
-    }
     await page.close();
   }
   await env.ctx.close();
@@ -1057,6 +915,113 @@ try {
     await page.close();
   }
 
+  // ============ #29: CSS positioning (1.3.2 / TT 15.B) ============
+  // data-expect = review (shows out of reading order) or pass (no finding).
+  {
+    await assertPage(env, '[css-position]', 'css-position.html', { tool: 'css-position', buttonId: 'run-css-position', wcag: '1.3.2', waitMs: 800 });
+    const { page, tabId } = await openFixture(env, 'css-position.html', 800);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await clickAndWait(env, 'run-css-position', /^css-position: \d+ findings/);
+    let f = await storedFindings(env, tabId, 'css-position');
+    check('[css-position] every finding is review', f.length > 0 && f.every((x) => x.severity === 'review'), JSON.stringify(f.map((x) => [x.severity, x.selector])));
+    const rr = (f.find((x) => x.selector === '#row-reverse') || {}).details || '';
+    check('[css-position] a row-reverse container gives one finding that names the items', f.filter((x) => x.selector === '#row-reverse').length === 1 && /“Second” shows before “First”/.test(rr), rr);
+    const status = await env.popup.evaluate(() => document.getElementById('status').textContent);
+    check('[css-position] the status says how many moved and how many are out of order', /\d+ moved, \d+ out of reading order/.test(status), status);
+    const chat = (f.find((x) => x.selector === '#fixed-chat') || {}).details || '';
+    check('[css-position] a bottom-fixed element with a control names the control', /fixed to the bottom or side/.test(chat) && /“Chat with us”/.test(chat), chat);
+    // Fixed elements are judged as the page shows at scroll 0, wherever the
+    // page is scrolled when the tool runs.
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await sleep(300);
+    // After a page scroll the outlines still sit on their elements: a normal
+    // one reuses its page extent, a fixed one is measured again.
+    const follows = await page.evaluate(() => {
+      const layer = document.getElementById('__a11y-css-position');
+      const on = (sel) => {
+        const b = layer && layer.querySelector(`[data-selector="${sel}"]`);
+        if (!b) return false;
+        const o = b.getBoundingClientRect();
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return o.left <= r.left + 1 && o.top <= r.top + 1 && o.right >= r.right - 1 && o.bottom >= r.bottom - 1;
+      };
+      return { gridSwap: on('#grid-swap'), fixedTop: on('#fixed-top') };
+    });
+    check('[css-position] after a page scroll, outlines follow their elements (normal and fixed)', follows.gridSwap && follows.fixedTop, JSON.stringify(follows));
+    await clickAndWait(env, 'run-css-position', /^css-position: \d+ findings/);
+    const scrolled = await storedFindings(env, tabId, 'css-position');
+    check('[css-position] scrolled to the end: the top-fixed header is still out of order, the note still not',
+      severityFor(scrolled, '#fixed-top', '1.3.2') === 'review' && severityFor(scrolled, '#fixed-chat', '1.3.2') === 'review' && severityFor(scrolled, '#fixed-note', '1.3.2') === 'pass',
+      JSON.stringify(scrolled.filter((x) => x.selector.startsWith('#fixed')).map((x) => [x.severity, x.selector])));
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(300);
+    await clickAndWait(env, 'run-css-position', /^css-position: \d+ findings/);
+    f = await storedFindings(env, tabId, 'css-position');
+
+    const overlay = () =>
+      page.evaluate(() => {
+        const layer = document.getElementById('__a11y-css-position');
+        if (!layer) return null;
+        const box = (sel) => {
+          const b = layer.querySelector(`[data-selector="${sel}"]`);
+          return b ? b.getBoundingClientRect().toJSON() : null;
+        };
+        return {
+          count: Number(layer.dataset.count),
+          marker: document.documentElement.dataset.a11yCssPosition || null,
+          changed: layer.querySelectorAll('[data-order="changed"]').length,
+          collapsed: box('#collapsed'),
+          img: document.querySelector('#collapsed img').getBoundingClientRect().toJSON(),
+        };
+      });
+    let o = await overlay();
+    check('[css-position] Run draws the overlay with the marker on', o && o.count > 0 && o.changed === f.length && o.marker === 'on', JSON.stringify(o && { count: o.count, changed: o.changed, findings: f.length, marker: o.marker }));
+    const encloses = (a, b) => a && a.left <= b.left + 1 && a.top <= b.top + 1 && a.right >= b.right - 1 && a.bottom >= b.bottom - 1;
+    check('[css-position] the outline of a zero-height wrapper goes around its image', o && encloses(o.collapsed, o.img), JSON.stringify(o && { box: o.collapsed, img: o.img }));
+    check('[css-position] the overlay toggle reads Hide overlay', (await env.popup.evaluate(() => document.getElementById('toggle-css-position-overlay').textContent)) === 'Hide overlay');
+    await env.popup.click('#clear-overlays');
+    await sleep(500);
+    check('[css-position] Clear overlays leaves the CSS positioning overlay', !!(await overlay()));
+
+    // Linearize: moved content goes back into the flow, reordering is undone,
+    // and Undo puts the page's own values back.
+    const layout = () =>
+      page.evaluate(() => ({
+        price: getComputedStyle(document.getElementById('price')).position,
+        aside: getComputedStyle(document.getElementById('aside')).float,
+        flex: getComputedStyle(document.getElementById('row-reverse')).flexDirection,
+        order: getComputedStyle(document.querySelector('#ordered .first')).order,
+        gridInline: document.getElementById('gi-inline').style.gridColumnStart,
+        marked: document.querySelectorAll('[data-a11y-linearize]').length,
+        marker: document.documentElement.dataset.a11yLinearize || null,
+      }));
+    await clickAndWait(env, 'toggle-css-linearize', /^css-position: page linearized/);
+    let l = await layout();
+    check('[css-position] Linearize removes positioning, floats and flex reordering', l.price === 'static' && l.aside === 'none' && l.flex === 'row' && l.order === '0' && l.marked > 0 && l.marker === 'on', JSON.stringify(l));
+    check('[css-position] the Linearize button reads Undo linearize', (await env.popup.evaluate(() => document.getElementById('toggle-css-linearize').textContent)) === 'Undo linearize');
+    await clickAndWait(env, 'toggle-css-linearize', /^css-position: linearize off/);
+    l = await layout();
+    check('[css-position] Undo linearize puts the page\'s values back, including a partial inline grid placement', l.price === 'absolute' && l.aside === 'right' && l.flex === 'row-reverse' && l.order === '-1' && l.gridInline === '1' && l.marked === 0 && !l.marker, JSON.stringify(l));
+    await clickAndWait(env, 'toggle-css-linearize', /^css-position: page linearized/);
+    await clickAndWait(env, 'toggle-css-position-overlay', /^css-position: overlay off/);
+    l = await layout();
+    check('[css-position] Hide overlay also ends Linearize', !(await overlay()) && l.price === 'absolute' && !l.marker, JSON.stringify(l));
+
+    // A batch run scans without drawing; Clear all removes overlay and linearize.
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => {
+      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'css-position';
+    });
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+    f = await storedFindings(env, tabId, 'css-position');
+    check('[batch] Run selected runs the CSS positioning checker without an overlay', severityFor(f, '#price', '1.3.2') === 'review' && !(await overlay()), JSON.stringify(f.map((x) => [x.severity, x.selector])));
+    await clickAndWait(env, 'toggle-css-linearize', /^css-position: page linearized/);
+    await clickAndWait(env, 'clear-all-checkers', /^Cleared/);
+    l = await layout();
+    check('[css-position] Clear all checkers removes the overlay and ends Linearize', !(await overlay()) && l.price === 'absolute' && !l.marker, JSON.stringify(l));
+    await page.close();
+  }
+
   // ============ #22: error capture (3.3.1 / TT 5.F, 5.G) ============
   // The test plays the tester: it clicks each Submit button with the fields
   // empty. The capture only watches.
@@ -1256,6 +1221,182 @@ try {
     await page.close();
   }
   await env.ctx.close();
+}
+
+// The audio checker (1.4.2 / TT 2.A) and Reload and record: real sound.
+// Run with --audio or --all.
+async function audioSections() {
+  // ======================= autoplay ALLOWED, with sound =======================
+  let env = await launch('no-user-gesture-required', { sound: true });
+
+  // #10 — audio, playing case.
+  // 5 s wait: #over (3.5 s clip) must have ended, so its plain-Run grade is stable.
+  await assertPage(env, '[audio allowed]', 'audio-autoplay.html', { tool: 'audio', buttonId: 'run-audio', wcag: '1.4.2', waitMs: 5000 });
+  await assertPage(env, '[audio allowed]', 'audio-pause-first.html', { tool: 'audio', buttonId: 'run-audio', wcag: '1.4.2' });
+  await assertPage(env, '[audio allowed]', 'audio-script.html', { tool: 'audio', buttonId: 'run-audio', wcag: '1.4.2' });
+
+  // Batch includes audio.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-pause-first.html');
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await env.popup.evaluate(() => {
+      for (const b of document.querySelectorAll('.batch-select')) b.checked = b.dataset.batchId === 'audio' || b.dataset.batchId === 'motion';
+    });
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+    const f = await storedFindings(env, tabId, 'audio');
+    check('[batch] Run selected runs the audio checker', f.length >= 1, JSON.stringify(f));
+    await page.close();
+  }
+  // Reload and record with autoplay allowed: the hook proves the script
+  // started #scripted with no user action, so it is a definite fail.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
+    await clickAndWait(env, 'record-audio', /after a recorded reload/);
+    const f = await storedFindings(env, tabId, 'audio');
+    for (const id of ['#scripted', '#delayed', '#over']) {
+      const got = severityFor(f, id, '1.4.2');
+      check(`[audio allowed recorded] audio-autoplay.html ${id} → fail`, got === 'fail', `got ${got}: ${JSON.stringify(f.map((x) => [x.severity, x.selector]))}`);
+    }
+    const banner = await env.popup.evaluate(() => document.getElementById('banner').textContent);
+    check('[audio allowed recorded] no "recorder did not run" banner', !/recorder did not run/i.test(banner), banner);
+    await page.close();
+  }
+  // Plain Run after a 3.5 s autoplay clip has ended: still reported (never
+  // silently missed), capped at review without a recording (PR #16 review).
+  {
+    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 6000);
+    await clickAndWait(env, 'run-audio', /^audio: \d+ findings/);
+    const f = await storedFindings(env, tabId, 'audio');
+    const got = severityFor(f, '#over', '1.4.2');
+    check('[audio allowed late] ended 3.5 s autoplay #over → review (no recording)', got === 'review', `got ${got}`);
+    await page.close();
+  }
+  // Without Reload and record, the checker must report that no hook ran.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-pause-first.html', 500);
+    const hooked = await env.popup.evaluate(async (tabId) => {
+      for (const file of ['checkers/lib/selector.js', 'checkers/lib/findings.js', 'checkers/lib/accname.js', 'checkers/lib/mechanism.js', 'checkers/audio-check.js']) {
+        await chrome.scripting.executeScript({ target: { tabId }, files: [file] });
+      }
+      const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.__a11yCheckers.audio().hooked });
+      return r.result;
+    }, tabId);
+    check('[handshake] plain page reports hooked: false', hooked === false, String(hooked));
+    await page.close();
+  }
+  await env.ctx.close();
+
+  // ======================= autoplay BLOCKED, with sound =======================
+  env = await launch('document-user-activation-required', { sound: true });
+  for (const file of ['audio-autoplay.html', 'audio-pause-first.html', 'audio-script.html']) {
+    await assertPage(env, '[audio blocked]', file, { tool: 'audio', buttonId: 'run-audio', attr: 'data-expect-blocked', wcag: '1.4.2' });
+  }
+  for (const file of ['audio-autoplay.html', 'audio-script.html']) {
+    await assertPage(env, '[audio recorded]', file, { tool: 'audio', attr: 'data-expect-recorded', wcag: '1.4.2', recorded: true });
+  }
+  // Review item 4: play() blocked on load, then the USER starts it from the
+  // native controls (a real click; no JS play()). Must not report as autoplay.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
+    await clickAndWait(env, 'record-audio', /after a recorded reload/);
+    const [sw] = env.ctx.serviceWorkers();
+    // Gesture-free (SW) injection: give #scripted native controls.
+    await sw.evaluate(async (tabId) => {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const el = document.getElementById('scripted');
+          el.controls = true;
+          el.scrollIntoView({ block: 'center' });
+        },
+      });
+    }, tabId);
+    await page.bringToFront();
+    await sleep(300);
+    const box = await page.locator('#scripted').boundingBox();
+    await page.mouse.click(box.x + 20, box.y + box.height / 2); // native play button
+    await sleep(1500);
+    const playingNow = await sw.evaluate(async (tabId) => {
+      const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => !document.getElementById('scripted').paused });
+      return r.result;
+    }, tabId);
+    check('[item 4] native-controls click started #scripted', playingNow, 'still paused — click missed the play button');
+    await env.popup.reload();
+    await sleep(500);
+    await clickAndWait(env, 'run-audio', /^audio: \d+ findings/);
+    const f = await storedFindings(env, tabId, 'audio');
+    const got = severityFor(f, '#scripted', '1.4.2');
+    check('[item 4] user-started #scripted after blocked play() → pass', got === 'pass', `got ${got}: ${JSON.stringify(f.filter((x) => x.selector === '#scripted').map((x) => x.details.slice(0, 80)))}`);
+    await page.close();
+  }
+  // PR #16 review item 3: a second recordAudio on the same tab is refused.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-script.html', 500);
+    const [a, b] = await env.popup.evaluate(
+      (tabId) =>
+        Promise.all([
+          chrome.runtime.sendMessage({ type: 'recordAudio', tabId }),
+          chrome.runtime.sendMessage({ type: 'recordAudio', tabId }),
+        ]),
+      tabId
+    );
+    const oks = [a, b].filter((r) => r && r.ok).length;
+    const refused = [a, b].find((r) => r && !r.ok);
+    check('[concurrent] exactly one recordAudio runs', oks === 1, JSON.stringify([a, b]));
+    check('[concurrent] the other is refused as already running', !!refused && /already running/.test(refused.error), JSON.stringify(refused));
+    await page.close();
+  }
+  // Reload and record must leave the debugger detached when no emulation is on.
+  {
+    const { page, tabId } = await openFixture(env, 'audio-script.html', 500);
+    await clickAndWait(env, 'record-audio', /after a recorded reload/);
+    // Playwright's own CDP session makes getTargets() report attached:true, so
+    // check the extension's stored state (detachIfIdle clears it on detach).
+    const state = await env.popup.evaluate(
+      async (tabId) => (await chrome.storage.session.get(`tab:${tabId}`))[`tab:${tabId}`] || null,
+      tabId
+    );
+    check('[recorded] extension detached after Reload and record', !state || !state.attached, JSON.stringify(state));
+    // A later reload is not hooked (script removed).
+    await page.reload();
+    await sleep(1000);
+    const hooked = await page.evaluate(() => !!window.__a11yAudioHook);
+    check('[recorded] hook not installed on the next reload', !hooked, 'hook present after plain reload');
+    await page.close();
+  }
+  await env.ctx.close();
+
+  // ============ autoplay BLOCKED, SIDE PANEL context (review item 2) ============
+  env = await launch('document-user-activation-required', { panel: true, sound: true });
+  {
+    const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
+    // Watch for the record button re-enabling before the cycle finishes.
+    await env.popup.evaluate(() => {
+      window.__enabledEarly = false;
+      const b = document.getElementById('record-audio');
+      new MutationObserver(() => {
+        const done = /after a recorded reload/.test(document.getElementById('status').textContent);
+        if (!b.disabled && !done) window.__enabledEarly = true;
+      }).observe(b, { attributes: true, attributeFilter: ['disabled'] });
+    });
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await clickAndWait(env, 'record-audio', /after a recorded reload/);
+    const early = await env.popup.evaluate(() => window.__enabledEarly);
+    check('[panel recorded] record button stays disabled for the whole cycle', !early, 'button re-enabled mid-cycle');
+    const f = await storedFindings(env, tabId, 'audio');
+    const exps = await expectations(env, tabId, 'data-expect-recorded');
+    for (const e of exps) {
+      const got = severityFor(f, e.sel, '1.4.2');
+      check(`[panel recorded] audio-autoplay.html #${e.id} → ${e.expect}`, got === e.expect, `got ${got}`);
+    }
+    await page.close();
+  }
+  await env.ctx.close();
+}
+
+try {
+  if (RUN_SILENT) await silentSections();
+  if (RUN_AUDIO) await audioSections();
 } catch (e) {
   check('script error', false, e.stack);
 } finally {

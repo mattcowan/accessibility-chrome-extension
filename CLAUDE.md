@@ -202,6 +202,75 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   that is on). The popup keeps the last list in session `tables:${tabId}` (with a
   `stamp`, so the side panel re-renders a list the popup stored but not its own — that
   would drop focus from the radio just changed).
+- `checkers/css-position.js` (1.3.2 / TT 15.B, registry `kind: 'css-position'`,
+  allFrames, batchable, #29) — `{action: scan|show|hide|linearize|status}`. Moved =
+  absolute/fixed, relative with a used offset ≥1px, float; reordering container =
+  flex `-reverse`/`wrap-reverse`, or in-flow items with `order` or explicit grid
+  placement (C27 — ANDI's linearize misses these). Content = text runs plus named
+  images/fields/media in flat-tree order; a moved element with none, or visually
+  hidden (clip, `inset(50%)`, 1×1 clipping box, outside the document), is skipped
+  and its content is never used as a neighbor. A moved element is compared with
+  its nearest seen neighbors outside its subtree (prev's LAST line vs its first,
+  its last vs next's FIRST: above/below wins, then the inline direction, RTL
+  aware from the computed direction of the element's parent — a `dir="rtl"`
+  section can sit on an LTR page; overlap = "covers"); a container compares its
+  items (element children AND bare text runs, which are anonymous flex items)
+  pairwise by their BOXES — boxes that overlap vertically share a line and are
+  compared by inline start edge in the container's own direction (a tall centered
+  item or a row-spanning grid cell is not "above" its neighbor), else above/below —
+  and gives ONE finding. Fixed (decided by Matt 2026-10-16): center in the top half of
+  the window → its rects are shifted by −scroll and compared as at scroll 0 (a
+  header coded last); lower → no order check, `review` only when it holds a visible
+  control (`pinned`; the host's own open shadow root is searched too), else outline
+  only; content inside a fixed element is never a neighbor of outside content. A
+  moved element INSIDE a fixed one is compared only with content inside that fixed
+  element (they scroll together, no shift), and gets no check at all inside a
+  bottom-fixed one. Ancestor lookups (fixed ancestor, nested dedupe) use one
+  tree-order stack over the seen entries (`up` = nearest seen ancestor entry); the
+  dedupe filters against EVERY moved ancestor's UNFILTERED issues (`raw`) — against
+  the nearest one's filtered list, A ⊃ B ⊃ C sharing a neighbor made C repeat A
+  (peer review 2026-10-16). The overlay re-measures on resize, linearize, a scan
+  and a scroll inside a container; a PAGE scroll (target `document`) reuses each
+  entry's page-coordinate extent unless it `floats` (fixed or sticky
+  ancestor-or-self) or the last full measure is over 1 s old (`FULL_EVERY_MS`:
+  bounds staleness from layout shifts and fixed DESCENDANTS, which `floats` does
+  not see). Scan and overlay share one content walk
+  (`walkContent`: aria-hidden, display, visibility and unit rules), and the overlay
+  skips the visually hidden moved elements the scan skipped. "Same line"
+  (`sameLine`) = vertical overlap ≥ half the shorter box; otherwise vertical
+  centers decide — with a fixed 2px tolerance, a block nudged up 5px read as
+  "covers" the line above (PR #30 review). Off page (`visuallyHidden`) is measured
+  against the window for a fixed element or anything inside one (`fixedFrame` —
+  NOT sticky: a sticky header further down is reached by scrolling; a child pushed
+  below a bottom-fixed bar can never be), EXCEPT when a box between the element and
+  the fixed ancestor (the fixed element's own `overflow: auto` included) scrolls:
+  then it is never off page (a drawer's content is reached by scrolling the drawer;
+  dropping it would lose a review — PR #30 round 3). The top/bottom pin comes from
+  the fixed element's OWN box, not the content union (a scrolling drawer's content
+  reaches far below the window and read as bottom-pinned); a box ≥ 90% of the
+  window tall is a side panel → the bottom branch (its midpoint sits on vh/2, so
+  rounding picked top or bottom at random — round 4). Everything not inside a
+  fixed element is measured against the root box: its scroll area always contains
+  the window, so in-view content never reads as off page. In an RTL page `scrollX`
+  is negative and the scrollable area grows LEFT of the root box, so the old
+  `x + scrollX < 0` test hid in-view content. The `scrolls` exception errs toward
+  an extra `review` (a clipped child of a scrolling bottom bar still counts as
+  visible) — the safe direction. Past `MAX_ITEMS` content items the scan stops and
+  adds a `(page)` review. `rangeOf` is memoized per node (one pass; no
+  `push(...children)`, which throws on huge child lists). Always `review`. Why not
+  trust ANDI: Chrome returns used px,
+  never `auto`, for top/left/bottom/right on relative/absolute/fixed elements with
+  no offset (verified 2026-10-16, Chromium 149), so ANDI's offset filter marks
+  every one of them; and its glow is a box-shadow on the element's own box, which a
+  zero-height wrapper or an `overflow:hidden` ancestor hides. The overlay
+  (`#__a11y-css-position`, marker `data-a11y-css-position`, NOT cleared by Clear
+  overlays) outlines the union of the element and its content, re-measured at each
+  draw; badges = reading-order number, placed left of the outline. Linearize
+  (marker `data-a11y-linearize`) sets inline `!important` (beats the page's own
+  inline `!important`) and restores the saved inline values newest-first, one
+  LONGHAND at a time (the `grid-area` shorthand reads '' when the page set only
+  `grid-column` inline, and restoring '' would wipe it — peer review 2026-10-16); a scan
+  while linearized undoes it, measures, and re-applies; hide ends it.
 - `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
   batchable) — group with no group label is `fail`, `review` when a member has
   aria-describedby, every member has table headers (bulk select), or a member's
@@ -385,7 +454,13 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Syntax: `node --check` (classic checker files directly; copy `background/`,
   `popup/*.js` to `.mjs` first — they're ES modules).
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
-  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  `tools/keyboard-trap-scan`'s `npm ci` for Playwright). The default run skips
+  the audio checker / Reload and record sections and launches every browser with
+  `--mute-audio` (Matt may be on a call); `--audio` runs only the audio sections,
+  with sound, and `--all` runs both. The `[#15]` activation guard stays in the
+  default run: it reads `hasBeenActive` and `play()` rejection, which muting does
+  not change. Run `--audio` only when Matt says sound is OK, and before handing
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
@@ -398,7 +473,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   labels, error capture, input watcher — the test plays the tester with real
   clicks/keys/selects); older checkers have no section yet — **extend it with each new checker**
   (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
-  `data-expect-blocked`, `data-expect-recorded`): launch twice, with
+  `data-expect-blocked`, `data-expect-recorded`; `--audio`/`--all` only): launch twice, with
   `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
   (Playwright sets no autoplay flag by default). Under Playwright,
   `chrome.debugger.getTargets()` always reports `attached: true` (Playwright's own
