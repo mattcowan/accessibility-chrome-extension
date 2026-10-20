@@ -6,3 +6,6 @@ node_modules/
 
 # Scanner output
 tools/keyboard-trap-scan/report.csv
+
+# Private working files (QA reports, issue drafts, scratch harnesses)
+/private/

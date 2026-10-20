@@ -448,6 +448,18 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - Newer CDP values (`reducedContrast`, `inverted-colors`,
   `prefers-reduced-transparency`) are capability-probed on first attach and their UI
   hidden if rejected — keep the probe when adding features.
+- **Never set `disabled` on the button a handler is running for.** Chrome moves focus
+  from a focused button that becomes disabled to `<body>`, and nothing puts it back:
+  after every Run, keyboard users saw no focus and NVDA users never heard the toggle's
+  new name (#6 audit, 2026-10-20). Use `setBusy(button, true/false)` + `if
+  (isBusy(button)) return;` (popup.js: `aria-disabled` plus a guard; it also survives
+  the side panel's restricted-UI reset). The same rule for re-renders: `renderReport`
+  and `renderTables` keep the focused element (`reportFocus`/`restoreReportFocus`;
+  `patchTableItem` updates a Tables item around its radio group) — never
+  `replaceChildren()` a list that can hold focus without putting focus back.
+- `popup.css` has a global `[hidden] { display: none !important; }`: an author
+  `display` (`.badge`, `#vision label`) beats the UA's `[hidden]` rule, so unrun
+  badges drew as empty pills and an unsupported Vision option stayed visible.
 
 ## Verify changes
 
@@ -460,7 +472,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when Matt says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 451 checks on 2026-10-20 after the #6 popup fixes: 400 in the default (muted) run (+14 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
@@ -471,7 +483,9 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   algorithm per cell via `data-expect-headers`, overlay, the saved choice), auto-update (`data-expect` = 2.2.2,
   `data-expect-notify` = 4.1.2), keyboard access, the focus locator, and the TT section 5 tools (form
   labels, error capture, input watcher — the test plays the tester with real
-  clicks/keys/selects); older checkers have no section yet — **extend it with each new checker**
+  clicks/keys/selects), and the popup's own accessibility (`[popup #6]`: focus after a
+  keyboard press and after Show all, button names, headings, badge text, the Tables
+  choice keeping its radio, the side panel at 320 px); older checkers have no section yet — **extend it with each new checker**
   (more gotchas in project memory `ext-e2e-verify-technique`). Audio fixtures carry per-policy expectations (`data-expect` = autoplay allowed,
   `data-expect-blocked`, `data-expect-recorded`; `--audio`/`--all` only): launch twice, with
   `--autoplay-policy=no-user-gesture-required` and `=document-user-activation-required`
