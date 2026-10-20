@@ -455,7 +455,8 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   (isBusy(button)) return;` (popup.js: `aria-disabled` plus a guard; it also survives
   the side panel's restricted-UI reset). The same rule for re-renders: `renderReport`
   and `renderTables` keep the focused element (`reportFocus`/`restoreReportFocus`;
-  `patchTableItem` updates a Tables item around its radio group) — never
+  `patchTableItem` keeps the reveal button, radio group and evidence details in
+  place) — never
   `replaceChildren()` a list that can hold focus without putting focus back.
 - `popup.css` has a global `[hidden] { display: none !important; }`: an author
   `display` (`.badge`, `#vision label`) beats the UA's `[hidden]` rule, so unrun
@@ -472,7 +473,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when Matt says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 451 checks on 2026-10-20 after the #6 popup fixes: 400 in the default (muted) run (+14 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 456 checks on 2026-10-20 after the #6 popup fixes and their peer review: 405 in the default (muted) run (+19 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

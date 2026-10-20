@@ -415,13 +415,28 @@ function reportFocus(groups) {
   if (!a || !groups.contains(a)) return null;
   const group = a.closest('details.tool-group');
   const key = { tool: group && group.dataset.tool, kind: 'summary' };
+  const row = a.closest('li.finding');
   if (a.classList.contains('highlight-all')) key.kind = 'highlight';
   else if (a.classList.contains('show-all')) key.kind = 'show-all';
-  else if (a.classList.contains('finding-reveal')) {
+  else if (row) {
+    // A row without a reveal button has focus itself (after Show all).
     key.kind = 'row';
-    key.selector = a.dataset.selector;
+    key.selector = rowSelector(row);
+    key.index = [...group.querySelectorAll('.tool-findings > li')].indexOf(row);
   }
   return key;
+}
+
+const rowSelector = (li) => li.querySelector('.finding-reveal')?.dataset.selector ?? null;
+
+// The row's reveal button, or the row itself when it has none (focusable
+// from script only).
+function focusableRow(li) {
+  if (!li) return null;
+  const button = li.querySelector('.finding-reveal');
+  if (button) return button;
+  li.tabIndex = -1;
+  return li;
 }
 
 function restoreReportFocus(groups, key) {
@@ -429,19 +444,22 @@ function restoreReportFocus(groups, key) {
   const group = [...groups.querySelectorAll('details.tool-group')].find((g) => g.dataset.tool === key.tool);
   let target = null;
   if (group) {
+    const rows = [...group.querySelectorAll('.tool-findings > li')];
     if (key.kind === 'highlight') target = group.querySelector('.highlight-all');
     if (key.kind === 'row') {
-      target = [...group.querySelectorAll('.finding-reveal')].find((b) => b.dataset.selector === key.selector);
+      // The same place if it holds the same finding; else that finding
+      // elsewhere (the list changed); else the row now at that place.
+      const same = (li) => li && rowSelector(li) === key.selector;
+      target = focusableRow(same(rows[key.index]) ? rows[key.index] : rows.find(same) || rows[key.index]);
     }
     if (key.kind === 'show-all') {
-      // Show all is gone once every row shows: go to the first row it added.
-      const row = group.querySelectorAll('.tool-findings > li')[GROUP_ROW_CAP];
-      target = row && row.querySelector('.finding-reveal');
-      if (row && !target) {
-        row.tabIndex = -1;
-        target = row;
-      }
+      // Still capped (focus only rested on the button): the button. Once
+      // every row shows, the button is gone: the first row it added.
+      target = group.querySelector('.show-all') || focusableRow(rows[GROUP_ROW_CAP]);
     }
+    // A row in a closed group cannot take focus (a refresh redraws every
+    // group closed).
+    if (target) group.open = true;
     target = target || group.querySelector('summary');
   } else {
     // The group is gone (its findings were cleared).
@@ -451,14 +469,14 @@ function restoreReportFocus(groups, key) {
   target.focus();
 }
 
-function renderReport(store) {
+// keep: where to put focus back (default: where it is now in the report).
+function renderReport(store, keep = reportFocus($('findings-groups'))) {
   lastStore = store;
   for (const [tool, data] of Object.entries(store.tools)) {
     renderBadge(tool, data.findings);
   }
   const { current, resolved } = allFindings(store);
   const groups = $('findings-groups');
-  const keep = reportFocus(groups);
   if (!current.length && !resolved.length) {
     $('report-summary').textContent = 'No findings yet.';
     groups.replaceChildren();
@@ -1025,10 +1043,10 @@ function chromeText(c) {
   }
 }
 
-// One list item per table; `focus` is the radio button that was just changed.
-// When the list holds the same tables in the same order (a changed Data /
-// Layout choice, a re-run), each item is patched around its radio group, so a
-// focused radio stays in the DOM. Rebuilding removed it, and NVDA read the
+// One list item per table; `focus` is the radio button to focus after a
+// rebuild. When the list holds the same tables in the same order (a changed
+// Data / Layout choice, a re-run), each item is patched in place, so a
+// focused control stays in the DOM. Rebuilding removed it, and NVDA read the
 // whole page context again on every choice (#6).
 function renderTables(tables, focus = null) {
   const panel = $('tables-panel');
@@ -1059,8 +1077,12 @@ function renderTables(tables, focus = null) {
   }
 }
 
-// Everything in an item except its radio group is replaced; the group takes
-// its state (checked radio, the guess named in the first label) from `fresh`.
+// Patches an item in place. The three parts that can hold focus stay in the
+// DOM (moving a focused element, even back to its place, blurs it) and take
+// what they show from `fresh`: the reveal button (the rest of its line is
+// replaced), the radio group (checked radio, the guess named in the first
+// label) and the evidence <details> (its list is replaced). The other parts
+// are replaced.
 function patchTableItem(li, fresh) {
   const group = li.querySelector('.table-class');
   const freshGroup = fresh.querySelector('.table-class');
@@ -1070,13 +1092,35 @@ function patchTableItem(li, fresh) {
     labels[k].querySelector('input').checked = label.querySelector('input').checked;
     labels[k].lastChild.textContent = label.lastChild.textContent;
   });
-  const evidenceOpen = li.querySelector('.table-evidence')?.open;
-  for (const child of [...li.children]) if (child !== group) child.remove();
-  const parts = [...fresh.children];
-  const at = parts.indexOf(freshGroup);
-  group.before(...parts.slice(0, at));
-  group.after(...parts.slice(at + 1));
-  if (evidenceOpen) li.querySelector('.table-evidence').open = true;
+
+  const line = li.querySelector('.table-line');
+  const freshLine = fresh.querySelector('.table-line');
+  const reveal = line.querySelector('.table-reveal');
+  const freshReveal = freshLine.querySelector('.table-reveal');
+  Object.assign(reveal.dataset, freshReveal.dataset);
+  reveal.textContent = freshReveal.textContent;
+  reveal.title = freshReveal.title;
+  for (const child of [...line.children]) if (child !== reveal) child.remove();
+  reveal.after(...[...freshLine.children].filter((c) => c !== freshReveal));
+
+  const evidence = li.querySelector('.table-evidence');
+  const freshEvidence = fresh.querySelector('.table-evidence');
+  evidence.querySelector('ul').replaceWith(freshEvidence.querySelector('ul'));
+
+  // Put the fresh parts in order around the kept ones, which never move.
+  const kept = new Map([[freshLine, line], [freshGroup, group], [freshEvidence, evidence]]);
+  const keptOld = new Set(kept.values());
+  for (const child of [...li.children]) if (!keptOld.has(child)) child.remove();
+  let prev = null;
+  for (const part of [...fresh.children]) {
+    if (kept.has(part)) {
+      prev = kept.get(part);
+      continue;
+    }
+    if (prev) prev.after(part);
+    else li.prepend(part);
+    prev = part;
+  }
 }
 
 function tableItem(t, i) {
@@ -1165,9 +1209,9 @@ function tableItem(t, i) {
   return li;
 }
 
-async function renderStoredTables() {
+async function renderStoredTables(focus = null) {
   const stored = (await chrome.storage.session.get(tablesKey()))[tablesKey()];
-  renderTables(stored && normUrl(stored.url) === normUrl(tab.url) ? stored.tables : null);
+  renderTables(stored && normUrl(stored.url) === normUrl(tab.url) ? stored.tables : null, focus);
 }
 
 // Save the tester's Data / Layout choice ('auto' removes it), then check
@@ -1896,9 +1940,14 @@ function setRestrictedUI(on) {
 // Re-resolves the active tab and re-renders everything that is per-tab. The
 // popup runs this once; the side panel re-runs it on tab switch/navigation.
 let refreshToken = 0;
+// The focus a refresh took before its clear, until a refresh draws again. A
+// newer refresh can start after an older one's clear and before its redraw
+// (an SPA route change fires two close together): it uses this instead.
+let refreshFocus = null;
 
 async function refreshForActiveTab() {
   const token = ++refreshToken; // last-wins guard against rapid tab switches
+  const prevTabId = tab && tab.id;
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (token !== refreshToken) return;
   tab = active;
@@ -1906,11 +1955,27 @@ async function refreshForActiveTab() {
   setRestrictedUI(restricted);
 
   // Clear per-tab UI before any early return — a switch to a restricted tab
-  // must not leave the previous tab's findings on screen.
+  // must not leave the previous tab's findings on screen. For the same tab
+  // (the side panel refreshes on its reload or route change while the
+  // tester works in the panel), focus in the report or on a Tables radio is
+  // taken first, so the renders below can put it back. Another tab is a new
+  // context: focus is not carried over.
+  const sameTab = prevTabId === (tab && tab.id);
+  const radio = sameTab && document.activeElement && document.activeElement.closest('#tables-list input[type="radio"]');
+  let keep = sameTab
+    ? { report: reportFocus($('findings-groups')), table: radio ? { key: radio.dataset.key, value: radio.value } : null }
+    : null;
+  // Only while focus is still where an older refresh's clear left it, so a
+  // tester who has moved on keeps their own focus.
+  const leftByClear = [$('report-summary'), document.body].includes(document.activeElement);
+  if (keep && !keep.report && !keep.table && leftByClear && refreshFocus) keep = refreshFocus;
+  refreshFocus = keep;
+  const reportKey = keep ? keep.report : undefined;
+  const tableFocus = keep ? keep.table : null;
   banner('');
   for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
   $('batch-progress').textContent = '';
-  renderReport({ url: tab && tab.url, tools: {} });
+  renderReport({ url: tab && tab.url, tools: {} }, reportKey);
   renderTables(null);
   if (restricted) return;
 
@@ -1919,9 +1984,10 @@ async function refreshForActiveTab() {
   if (res && res.ok) renderState(res.state, res.caps);
   const store = await getStore();
   if (token !== refreshToken) return;
-  renderReport(store);
-  await renderStoredTables();
+  renderReport(store, reportKey);
+  await renderStoredTables(tableFocus);
   if (token !== refreshToken) return;
+  refreshFocus = null;
   refreshTextSpacingButton();
   // One read of the page markers for every label (and a watch to resume).
   const markers = pageMarkers();

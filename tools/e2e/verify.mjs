@@ -1316,14 +1316,75 @@ async function silentSections() {
     await env.popup.keyboard.press('ArrowUp');
     await env.popup.waitForFunction(() => /^tables: saved/.test(document.getElementById('status').textContent), null, { timeout: 60000 });
 
-    // Side panel at 320px: no horizontal scroll (WCAG 1.4.10).
-    await page.bringToFront();
+    // Side panel at 320px: no horizontal scroll (WCAG 1.4.10). A new page is
+    // the active tab, so bring the fixture back and reload the panel: it
+    // binds to the active tab at init (its onActivated listener is added only
+    // at the end of init, so a switch right after goto can be missed).
     const panel = await env.ctx.newPage();
     await panel.setViewportSize({ width: 320, height: 800 });
     await panel.goto(`chrome-extension://${env.id}/popup/popup.html?context=panel`);
-    await panel.waitForFunction(() => document.querySelector('.badge:not([hidden])'), null, { timeout: 10000 }).catch(() => {});
+    await page.bringToFront();
+    await panel.reload();
+    await panel.waitForFunction(() => document.querySelector('.badge:not([hidden])') && document.querySelector('#tables-list .table-item'), null, { timeout: 15000 });
     const width = await panel.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
     check('[popup #6] the side panel fits 320px with no horizontal scroll', width.scroll <= width.client, JSON.stringify(width));
+
+    // Re-renders keep focus (#6 review). The panel redraws when the popup
+    // stores findings or a Tables list. `redraws` counts mutations of a list.
+    const watchRedraws = (sel) => panel.evaluate((s) => {
+      window.__redraws = 0;
+      new MutationObserver(() => window.__redraws++).observe(document.querySelector(s), { childList: true, subtree: true });
+    }, sel);
+    const redrawn = () => panel.waitForFunction(() => window.__redraws > 0, null, { timeout: 60000 }).then(() => sleep(300));
+    for (const [label, sel] of [['the table reveal button', '#tables-list .table-reveal'], ['the evidence summary', '#tables-list .table-evidence summary']]) {
+      await panel.evaluate((s) => { window.__kept = document.querySelector(s); window.__kept.focus(); }, sel);
+      await watchRedraws('#tables-list');
+      await clickAndWait(env, 'run-tables', /^tables:/);
+      await redrawn();
+      const kept = await panel.evaluate(() => ({ same: document.activeElement === window.__kept, connected: window.__kept.isConnected }));
+      check(`[popup #6] a Tables redraw keeps focus on ${label}`, kept.same && kept.connected, JSON.stringify(kept));
+    }
+    const writeTargets = (note) => env.popup.evaluate(async ({ tabId, url, note }) => {
+      const key = `findings:${tabId}`;
+      const store = (await chrome.storage.session.get(key))[key];
+      store.tools['target-size'] = { resolved: [], findings: Array.from({ length: 40 }, (_, i) => ({ tool: 'target-size', wcag: '2.5.8', severity: 'warn', selector: `#t${i}`, snippet: '', details: `Row ${i} ${note}`, url, timestamp: '', status: 'new' })) };
+      await chrome.storage.session.set({ [key]: store });
+    }, { tabId, url: page.url(), note });
+    await watchRedraws('#findings-groups');
+    await writeTargets('a');
+    await redrawn();
+    await panel.evaluate(() => {
+      document.querySelector('details.tool-group[data-tool="target-size"]').open = true;
+      document.querySelector('details.tool-group[data-tool="target-size"] .show-all').focus();
+    });
+    await watchRedraws('#findings-groups');
+    await writeTargets('b');
+    await redrawn();
+    const onShowAll = await panel.evaluate(() => document.activeElement.classList.contains('show-all'));
+    check('[popup #6] a redraw keeps focus on Show all that was not pressed', onShowAll);
+
+    // A reload of the tracked tab refreshes the panel (it clears the report
+    // and the Tables list, then draws them again); focus stays put. Each
+    // check waits for the redraw first: focus is already in place before it.
+    await panel.evaluate(() => document.querySelector('details.tool-group[data-tool="target-size"] .finding-reveal[data-selector="#t5"]').focus());
+    await watchRedraws('#findings-groups');
+    await page.reload();
+    await panel.waitForFunction(() => window.__redraws > 0 && document.querySelector('details.tool-group[data-tool="target-size"]'), null, { timeout: 15000 });
+    await sleep(300);
+    const rowBack = await panel.evaluate(() => document.activeElement.dataset.selector === '#t5');
+    check('[popup #6] a reload of the page keeps focus on the same finding in the side panel', rowBack, await panel.evaluate(() => document.activeElement.outerHTML.slice(0, 120)));
+    await panel.waitForFunction(() => document.querySelector('#tables-list .table-item input[value="layout"]'), null, { timeout: 15000 });
+    const radio = await panel.evaluate(() => {
+      const r = document.querySelector('#tables-list .table-item input[value="layout"]');
+      r.focus();
+      return { key: r.dataset.key, value: r.value };
+    });
+    await watchRedraws('#tables-list');
+    await page.reload();
+    await panel.waitForFunction(() => window.__redraws > 0 && document.querySelector('#tables-list .table-item'), null, { timeout: 15000 });
+    await sleep(300);
+    const radioBack = await panel.evaluate((r) => document.activeElement.dataset.key === r.key && document.activeElement.value === r.value, radio);
+    check('[popup #6] a reload of the page keeps focus on the same Tables radio in the side panel', radioBack, await panel.evaluate(() => document.activeElement.outerHTML.slice(0, 120)));
     await panel.close();
 
     await clickAndWait(env, 'clear-findings', /^Cleared the findings/);
