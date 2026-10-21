@@ -40,5 +40,5 @@ Columns are `tool` (always `"keyboard-trap-scan"`), `wcag` (always `"2.1.2"`), `
 - Any new detection logic (trap patterns, probes) must preserve the warn/fail escapability semantics (escapable = warn, inescapable = fail).
 - The CSV schema must remain stable. Do not add or remove columns without coordinating with the extension.
 - Keep the focusable-detection logic in sync between `lib/focusables.js` and the extension's `checkers/lib/selector.js` by hand (no shared build step).
-- Test against the local test page (`http://localhost/chrome-ext-accessibility-modes/test-pages/keyboard-trap.html`) and verify exit codes match expectations.
+- Test against the local test page (serve it with `python -m http.server 8000 --directory test-pages` from the repo root, then open `http://localhost:8000/keyboard-trap.html`) and verify exit codes match expectations.
 

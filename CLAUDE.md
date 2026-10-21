@@ -474,10 +474,10 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
 - **E2E:** `node tools/e2e/verify.mjs` from the repo root (needs
   `tools/keyboard-trap-scan`'s `npm ci` for Playwright). The default run skips
   the audio checker / Reload and record sections and launches every browser with
-  `--mute-audio` (Matt may be on a call); `--audio` runs only the audio sections,
+  `--mute-audio` (the user may be on a call); `--audio` runs only the audio sections,
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
-  not change. Run `--audio` only when Matt says sound is OK, and before handing
+  not change. Run `--audio` only when the user says sound is OK, and before handing
   over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 457 checks on 2026-10-20 after the #6 popup fixes, their peer review and PR #35 round 1: 406 in the default (muted) run (+20 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
@@ -499,7 +499,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `chrome.debugger.getTargets()` always reports `attached: true` (Playwright's own
   session) — check the `tab:${id}` session state instead.
 - Scanner: `cd tools/keyboard-trap-scan && node scan.js
-  "file:///C:/wamp64/www/chrome-ext-accessibility-modes/test-pages/keyboard-trap.html"`
+  "file:///<absolute path to the repo>/test-pages/keyboard-trap.html"`
   → expect `fail`, exit 1; with `?escapable=1` → `warn`, exit 0;
   `focus-styles.html` → clean, exit 0.
 - Manual-only surface: popup UI interactions, infobar behavior, colorblind sims
