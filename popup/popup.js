@@ -82,8 +82,13 @@ function banner(text) {
   el.hidden = !text;
 }
 
+// The same text again is no change, so NVDA stays silent on a second reveal
+// (PR #35 review; clearing it and setting it again 100 ms later was silent
+// too). A trailing no-break space, which is not spoken, is added or dropped,
+// so the text always differs.
 function announce(text) {
-  $('status').textContent = text;
+  const el = $('status');
+  el.textContent = el.textContent === text ? `${text} ` : text;
 }
 
 // A running action marks its button busy instead of disabling it. A focused
@@ -1066,6 +1071,8 @@ function renderTables(tables, focus = null) {
   const old = [...list.children];
   if (old.length === fresh.length && old.every((li, i) => li.dataset.key === fresh[i].dataset.key)) {
     old.forEach((li, i) => patchTableItem(li, fresh[i]));
+    // `focus` is not needed here: patchTableItem keeps every focusable part
+    // in place, so focus never left. A new focusable part must be kept there.
     return;
   }
   list.replaceChildren(...fresh);
@@ -1082,7 +1089,8 @@ function renderTables(tables, focus = null) {
 // what they show from `fresh`: the reveal button (the rest of its line is
 // replaced), the radio group (checked radio, the guess named in the first
 // label) and the evidence <details> (its list is replaced). The other parts
-// are replaced.
+// are replaced. Both items come from tableItem, so they have the same shape;
+// change the two functions together.
 function patchTableItem(li, fresh) {
   const group = li.querySelector('.table-class');
   const freshGroup = fresh.querySelector('.table-class');

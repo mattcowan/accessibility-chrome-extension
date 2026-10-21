@@ -1387,6 +1387,22 @@ async function silentSections() {
     check('[popup #6] a reload of the page keeps focus on the same Tables radio in the side panel', radioBack, await panel.evaluate(() => document.activeElement.outerHTML.slice(0, 120)));
     await panel.close();
 
+    // The same announcement twice must change the status text, or NVDA stays
+    // silent the second time (PR #35 review, verified with NVDA).
+    const revealSel = 'details.tool-group[data-tool="tables"] .finding-reveal';
+    await env.popup.evaluate(() => {
+      document.querySelector('details.tool-group[data-tool="tables"]').open = true;
+      document.getElementById('status').textContent = '';
+    });
+    await env.popup.click(revealSel);
+    await env.popup.waitForFunction(() => /^Highlighted on the page/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const firstSay = await env.popup.evaluate(() => document.getElementById('status').textContent);
+    await env.popup.click(revealSel);
+    const secondSay = await env.popup
+      .waitForFunction((t) => document.getElementById('status').textContent !== t && document.getElementById('status').textContent, firstSay, { timeout: 20000 })
+      .then((h) => h.jsonValue(), () => firstSay);
+    check('[popup #6] a repeated announcement changes the status text', secondSay !== firstSay && secondSay.trim() === firstSay.trim(), JSON.stringify([firstSay, secondSay]));
+
     await clickAndWait(env, 'clear-findings', /^Cleared the findings/);
     check('[popup #6] Clear findings is announced', true);
     await page.close();
