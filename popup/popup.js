@@ -82,9 +82,25 @@ function banner(text) {
   el.hidden = !text;
 }
 
+// The same text again is no change, so NVDA stays silent on a second reveal
+// (PR #35 review; clearing it and setting it again 100 ms later was silent
+// too). A trailing no-break space, which is not spoken, is added or dropped,
+// so the text always differs.
 function announce(text) {
-  $('status').textContent = text;
+  const el = $('status');
+  el.textContent = el.textContent === text ? `${text} ` : text;
 }
+
+// A running action marks its button busy instead of disabling it. A focused
+// button that becomes disabled loses focus to <body> (Chrome moves it), so
+// keyboard and screen reader users lost their place after every Run (#6). A
+// busy button looks disabled and keeps focus; its handler ignores clicks.
+function setBusy(button, on) {
+  if (on) button.setAttribute('aria-disabled', 'true');
+  else button.removeAttribute('aria-disabled');
+}
+
+const isBusy = (button) => button.getAttribute('aria-disabled') === 'true';
 
 function send(msg) {
   return chrome.runtime.sendMessage({ ...msg, tabId: tab.id });
@@ -316,22 +332,20 @@ function renderBadge(tool, findings) {
   const fails = findings.filter((f) => f.severity === 'fail').length;
   const warns = findings.filter((f) => f.severity === 'warn').length;
   el.hidden = false;
+  // The severity is in the text, not only the color (WCAG 1.4.1, #6), so
+  // there is no title: it would only repeat the text.
   if (fails) {
     el.className = 'badge fail';
-    el.textContent = String(fails);
-    el.title = `${fails} fail`;
+    el.textContent = `${fails} fail`;
   } else if (warns) {
     el.className = 'badge warn';
-    el.textContent = String(warns);
-    el.title = `${warns} warn`;
+    el.textContent = `${warns} warn`;
   } else if (findings.length) {
     el.className = 'badge review';
-    el.textContent = String(findings.length);
-    el.title = `${findings.length} review`;
+    el.textContent = `${findings.length} review`;
   } else {
     el.className = 'badge clean';
-    el.textContent = '0';
-    el.title = 'no findings';
+    el.textContent = '0 found';
   }
 }
 
@@ -358,23 +372,22 @@ const GROUP_ROW_CAP = 30;
 
 const isRevealable = (sel) => sel && sel !== '(page)' && sel !== '(unknown)';
 
+// The head line is the reveal button; the details stay outside it, so the
+// button's name is "fail 1.4.3 #selector", not the whole finding (#6).
 function findingRow(f) {
   const li = document.createElement('li');
   li.className = 'finding';
   const clickable = isRevealable(f.selector);
-  const container = document.createElement(clickable ? 'button' : 'div');
+  const head = document.createElement(clickable ? 'button' : 'div');
+  head.className = 'finding-head';
   if (clickable) {
-    container.type = 'button';
-    container.className = 'finding-reveal';
-    container.dataset.selector = f.selector;
-    container.dataset.severity = f.severity;
-    container.title = 'Scroll to and highlight this element on the page';
-  } else {
-    container.className = 'finding-static';
+    head.type = 'button';
+    head.classList.add('finding-reveal');
+    head.dataset.selector = f.selector;
+    head.dataset.severity = f.severity;
+    head.title = 'Scroll to and highlight this element on the page';
   }
 
-  const head = document.createElement('div');
-  head.className = 'finding-head';
   const sev = document.createElement('span');
   sev.className = `sev sev-${f.severity}`;
   sev.textContent = f.severity;
@@ -396,20 +409,83 @@ function findingRow(f) {
   det.className = 'finding-details';
   det.textContent = f.details || '';
 
-  container.append(head, det);
-  li.appendChild(container);
+  li.append(head, det);
   return li;
 }
 
-function renderReport(store) {
+// Where focus is inside the report, so a rebuild can put it back: removing
+// the focused element sends focus to <body> (#6).
+function reportFocus(groups) {
+  const a = document.activeElement;
+  if (!a || !groups.contains(a)) return null;
+  const group = a.closest('details.tool-group');
+  const key = { tool: group && group.dataset.tool, kind: 'summary' };
+  const row = a.closest('li.finding');
+  if (a.classList.contains('highlight-all')) key.kind = 'highlight';
+  else if (a.classList.contains('show-all')) key.kind = 'show-all';
+  else if (row) {
+    // A row without a reveal button has focus itself (after Show all).
+    key.kind = 'row';
+    key.selector = rowSelector(row);
+    key.index = [...group.querySelectorAll('.tool-findings > li')].indexOf(row);
+  }
+  return key;
+}
+
+const rowSelector = (li) => li.querySelector('.finding-reveal')?.dataset.selector ?? null;
+
+// The row's reveal button, or the row itself when it has none (focusable
+// from script only).
+function focusableRow(li) {
+  if (!li) return null;
+  const button = li.querySelector('.finding-reveal');
+  if (button) return button;
+  li.tabIndex = -1;
+  return li;
+}
+
+function restoreReportFocus(groups, key) {
+  if (!key) return;
+  const group = [...groups.querySelectorAll('details.tool-group')].find((g) => g.dataset.tool === key.tool);
+  let target = null;
+  if (group) {
+    const rows = [...group.querySelectorAll('.tool-findings > li')];
+    if (key.kind === 'highlight') target = group.querySelector('.highlight-all');
+    if (key.kind === 'row') {
+      // The same place if it holds the same finding; else that finding
+      // elsewhere (the list changed); else the row now at that place.
+      const same = (li) => li && rowSelector(li) === key.selector;
+      target = focusableRow(same(rows[key.index]) ? rows[key.index] : rows.find(same) || rows[key.index]);
+    }
+    if (key.kind === 'show-all') {
+      // Still capped (focus only rested on the button): the button. Once
+      // every row shows, the button is gone: the first row it added.
+      target = group.querySelector('.show-all') || focusableRow(rows[GROUP_ROW_CAP]);
+    }
+    // A row in a closed group cannot take focus (a refresh redraws every
+    // group closed).
+    if (target) group.open = true;
+    target = target || group.querySelector('summary');
+  } else {
+    // The group is gone (its findings were cleared).
+    target = $('report-summary');
+    target.tabIndex = -1;
+  }
+  target.focus();
+}
+
+// keep: where to put focus back (default: where it is now in the report).
+function renderReport(store, keep = reportFocus($('findings-groups'))) {
   lastStore = store;
   for (const [tool, data] of Object.entries(store.tools)) {
     renderBadge(tool, data.findings);
   }
   const { current, resolved } = allFindings(store);
+  const groups = $('findings-groups');
   if (!current.length && !resolved.length) {
     $('report-summary').textContent = 'No findings yet.';
-    $('findings-groups').replaceChildren();
+    groups.replaceChildren();
+    restoreReportFocus(groups, keep);
     return;
   }
   const count = (sev) => current.filter((f) => f.severity === sev).length;
@@ -419,7 +495,6 @@ function renderReport(store) {
     `${count('review')} review. Vs last run: ${fresh} new, ${current.length - fresh} existing, ` +
     `${resolved.length} resolved.`;
 
-  const groups = $('findings-groups');
   // Keep groups the user opened open across re-renders.
   const openTools = new Set(
     [...groups.querySelectorAll('details.tool-group[open]')].map((d) => d.dataset.tool)
@@ -465,6 +540,7 @@ function renderReport(store) {
     }
     groups.appendChild(group);
   }
+  restoreReportFocus(groups, keep);
 }
 
 // -------------------------------------------------- reveal findings on page
@@ -480,6 +556,8 @@ async function revealFinding({ selector, severity }) {
     const results = await pageCall('__a11yOps', 'reveal', [selector, severity], true);
     if (!results.some((r) => r.result === true)) {
       banner('Element not found on the page — it may have been removed or re-rendered. Re-run the checker to refresh findings.');
+    } else {
+      announce('Highlighted on the page.');
     }
   } catch (e) {
     checkerError(e);
@@ -825,18 +903,19 @@ async function initAutoUpdateSeconds() {
 // the set time; this page waits it out with a visible countdown, then
 // collects. Top frame only. Like Reload and record, it holds the tab: if the
 // side panel switches tabs meanwhile, the countdown stops at once and the run
-// is abandoned (the page-side watch ends on its own). autoUpdateRunning keeps
-// the Run button disabled through the panel's restricted-UI reset, so a
-// second run cannot share the countdown. entry.resume: pick up a watch that
-// an earlier popup started (see resumeAutoUpdate) instead of starting one.
+// is abandoned (the page-side watch ends on its own). The Run button stays
+// busy for the whole watch (a batch run included; the panel's restricted-UI
+// reset does not clear it), so a second run cannot share the countdown.
+// entry.resume: pick up a watch that an earlier popup started (see
+// resumeAutoUpdate) instead of starting one.
 async function execAutoUpdate(entry) {
   autoUpdateRunning = true;
-  $('run-auto-update').disabled = true;
+  setBusy($('run-auto-update'), true);
   try {
     return await watchAndCollect(entry);
   } finally {
     autoUpdateRunning = false;
-    $('run-auto-update').disabled = restricted;
+    setBusy($('run-auto-update'), false);
   }
 }
 
@@ -892,8 +971,9 @@ async function watchAndCollect(entry) {
 // with those roles and the tester's saved Data / Layout choices
 // (chrome.storage.local `tableClass:${normUrl}`, keyed `${page}|${selector}`).
 // draw: the Run button draws the overlay; a batch run and a changed choice
-// only scan (the page redraws an overlay that is already on). The last list
-// is kept in chrome.storage.session `tables:${tabId}` for the next popup.
+// only scan (the page redraws an overlay that is already on). focus: the
+// radio button to keep focused (see renderTables). The last list is kept in
+// chrome.storage.session `tables:${tabId}` for the next popup.
 const tablesKey = () => `tables:${tab.id}`;
 const tableClassKey = () => `tableClass:${normUrl(tab.url)}`;
 const TABLES_ENTRY = () => CHECKERS.find((c) => c.id === 'tables');
@@ -902,7 +982,7 @@ const TABLES_ENTRY = () => CHECKERS.find((c) => c.id === 'tables');
 // the radio button just changed).
 let ownTablesStamp = null;
 
-async function execTables(entry, { draw = true } = {}) {
+async function execTables(entry, { draw = true, focus = null } = {}) {
   const ax = await send({ type: 'tableAX' }).catch((e) => ({ ok: false, error: e.message }));
   const overrides = (await chrome.storage.local.get(tableClassKey()))[tableClassKey()] || {};
   await inject([...LIBS, ...entry.files], true);
@@ -945,7 +1025,7 @@ async function execTables(entry, { draw = true } = {}) {
   }
   ownTablesStamp = `${Date.now()}-${Math.random()}`;
   await chrome.storage.session.set({ [tablesKey()]: { url: tab.url, tables, stamp: ownTablesStamp } });
-  renderTables(tables);
+  renderTables(tables, focus);
   const stored = await storeToolFindings('tables', findings);
   if (draw) $('toggle-tables-overlay').textContent = 'Hide overlay';
   return { tool: 'tables', count: stored.findings.length, note: `${tables.length} table${tables.length === 1 ? '' : 's'}`, tables };
@@ -968,8 +1048,11 @@ function chromeText(c) {
   }
 }
 
-// One list item per table. Rebuilt on every run; `focus` puts focus back on
-// the radio button that was just changed.
+// One list item per table; `focus` is the radio button to focus after a
+// rebuild. When the list holds the same tables in the same order (a changed
+// Data / Layout choice, a re-run), each item is patched in place, so a
+// focused control stays in the DOM. Rebuilding removed it, and NVDA read the
+// whole page context again on every choice (#6).
 function renderTables(tables, focus = null) {
   const panel = $('tables-panel');
   const list = $('tables-list');
@@ -984,91 +1067,15 @@ function renderTables(tables, focus = null) {
   $('tables-summary').textContent = tables.length
     ? `${tables.length} table${tables.length === 1 ? '' : 's'}: ${counts.data} data, ${counts.layout} layout, ${counts.unsure} not decided.`
     : 'No tables found on this page.';
-  list.replaceChildren();
-  tables.forEach((t, i) => {
-    const li = document.createElement('li');
-    li.className = 'table-item';
-
-    const line = document.createElement('div');
-    line.className = 'table-line';
-    const reveal = document.createElement('button');
-    reveal.type = 'button';
-    reveal.className = 'table-reveal secondary';
-    reveal.dataset.selector = t.selector;
-    reveal.dataset.severity = t.severity || 'review';
-    reveal.textContent = t.label;
-    reveal.title = `Scroll to and highlight ${t.label} (${t.selector})`;
-    const cls = document.createElement('strong');
-    cls.textContent = `${CLASS_NAMES[t.cls]}${t.confirmed ? ' (your choice)' : " (tool's guess)"}`;
-    line.append(reveal, cls);
-    if (t.severity) {
-      const sev = document.createElement('span');
-      sev.className = `sev sev-${t.severity}`;
-      sev.textContent = t.severity;
-      line.appendChild(sev);
-    }
-    li.appendChild(line);
-
-    const facts = document.createElement('p');
-    facts.className = 'table-facts';
-    facts.textContent = `${t.rows} × ${t.cols}${t.kind === 'aria' ? ' (ARIA)' : ''} · ${chromeText(t.chrome)}`;
-    li.appendChild(facts);
-
-    // The tester's choice. "Tool's guess" removes a saved choice.
-    const group = document.createElement('fieldset');
-    group.className = 'table-class';
-    const legend = document.createElement('legend');
-    legend.textContent = `${t.label} is a`;
-    group.appendChild(legend);
-    const options = [
-      ['auto', `Tool's guess (${CLASS_NAMES[t.guess]})`],
-      ['data', 'Data table'],
-      ['layout', 'Layout table'],
-    ];
-    for (const [value, text] of options) {
-      const label = document.createElement('label');
-      const input = document.createElement('input');
-      input.type = 'radio';
-      input.name = `table-class-${i}`;
-      input.value = value;
-      input.dataset.key = t.key;
-      input.checked = (t.confirmed || 'auto') === value;
-      label.append(input, ` ${text}`);
-      group.appendChild(label);
-    }
-    li.appendChild(group);
-
-    if (t.issues.length) {
-      const ul = document.createElement('ul');
-      ul.className = 'table-issues';
-      for (const issue of t.issues) {
-        const item = document.createElement('li');
-        item.textContent = `${issue.severity}: ${issue.text}`;
-        ul.appendChild(item);
-      }
-      li.appendChild(ul);
-    }
-
-    const evidence = document.createElement('details');
-    evidence.className = 'table-evidence';
-    const sum = document.createElement('summary');
-    sum.textContent = 'Why the tool guessed this';
-    const ev = document.createElement('ul');
-    for (const [side, items] of [['Signs of data', t.signals.data], ['Signs of layout', t.signals.layout]]) {
-      const item = document.createElement('li');
-      item.textContent = `${side}: ${items.length ? items.join(', ') : 'none'}.`;
-      ev.appendChild(item);
-    }
-    evidence.append(sum, ev);
-    li.appendChild(evidence);
-
-    const check = document.createElement('p');
-    check.className = 'table-check';
-    check.textContent = t.check;
-    li.appendChild(check);
-
-    list.appendChild(li);
-  });
+  const fresh = tables.map(tableItem);
+  const old = [...list.children];
+  if (old.length === fresh.length && old.every((li, i) => li.dataset.key === fresh[i].dataset.key)) {
+    old.forEach((li, i) => patchTableItem(li, fresh[i]));
+    // `focus` is not needed here: patchTableItem keeps every focusable part
+    // in place, so focus never left. A new focusable part must be kept there.
+    return;
+  }
+  list.replaceChildren(...fresh);
   if (focus) {
     const again = [...list.querySelectorAll('input[type="radio"]')].find(
       (r) => r.dataset.key === focus.key && r.value === focus.value
@@ -1077,9 +1084,142 @@ function renderTables(tables, focus = null) {
   }
 }
 
-async function renderStoredTables() {
+// Patches an item in place. The three parts that can hold focus stay in the
+// DOM (moving a focused element, even back to its place, blurs it) and take
+// what they show from `fresh`: the reveal button (the rest of its line is
+// replaced), the radio group (checked radio, the guess named in the first
+// label) and the evidence <details> (its list is replaced). The other parts
+// are replaced. Both items come from tableItem, so they have the same shape;
+// change the two functions together.
+function patchTableItem(li, fresh) {
+  const group = li.querySelector('.table-class');
+  const freshGroup = fresh.querySelector('.table-class');
+  group.querySelector('legend').textContent = freshGroup.querySelector('legend').textContent;
+  const labels = group.querySelectorAll('label');
+  freshGroup.querySelectorAll('label').forEach((label, k) => {
+    labels[k].querySelector('input').checked = label.querySelector('input').checked;
+    labels[k].lastChild.textContent = label.lastChild.textContent;
+  });
+
+  const line = li.querySelector('.table-line');
+  const freshLine = fresh.querySelector('.table-line');
+  const reveal = line.querySelector('.table-reveal');
+  const freshReveal = freshLine.querySelector('.table-reveal');
+  Object.assign(reveal.dataset, freshReveal.dataset);
+  reveal.textContent = freshReveal.textContent;
+  reveal.title = freshReveal.title;
+  for (const child of [...line.children]) if (child !== reveal) child.remove();
+  reveal.after(...[...freshLine.children].filter((c) => c !== freshReveal));
+
+  const evidence = li.querySelector('.table-evidence');
+  const freshEvidence = fresh.querySelector('.table-evidence');
+  evidence.querySelector('ul').replaceWith(freshEvidence.querySelector('ul'));
+
+  // Put the fresh parts in order around the kept ones, which never move.
+  const kept = new Map([[freshLine, line], [freshGroup, group], [freshEvidence, evidence]]);
+  const keptOld = new Set(kept.values());
+  for (const child of [...li.children]) if (!keptOld.has(child)) child.remove();
+  let prev = null;
+  for (const part of [...fresh.children]) {
+    if (kept.has(part)) {
+      prev = kept.get(part);
+      continue;
+    }
+    if (prev) prev.after(part);
+    else li.prepend(part);
+    prev = part;
+  }
+}
+
+function tableItem(t, i) {
+  const li = document.createElement('li');
+  li.className = 'table-item';
+  li.dataset.key = t.key;
+
+  const line = document.createElement('div');
+  line.className = 'table-line';
+  const reveal = document.createElement('button');
+  reveal.type = 'button';
+  reveal.className = 'table-reveal secondary';
+  reveal.dataset.selector = t.selector;
+  reveal.dataset.severity = t.severity || 'review';
+  reveal.textContent = t.label;
+  reveal.title = `Scroll to and highlight ${t.label} (${t.selector})`;
+  const cls = document.createElement('strong');
+  cls.textContent = `${CLASS_NAMES[t.cls]}${t.confirmed ? ' (your choice)' : " (tool's guess)"}`;
+  line.append(reveal, cls);
+  if (t.severity) {
+    const sev = document.createElement('span');
+    sev.className = `sev sev-${t.severity}`;
+    sev.textContent = t.severity;
+    line.appendChild(sev);
+  }
+  li.appendChild(line);
+
+  const facts = document.createElement('p');
+  facts.className = 'table-facts';
+  facts.textContent = `${t.rows} × ${t.cols}${t.kind === 'aria' ? ' (ARIA)' : ''} · ${chromeText(t.chrome)}`;
+  li.appendChild(facts);
+
+  // The tester's choice. "Tool's guess" removes a saved choice.
+  const group = document.createElement('fieldset');
+  group.className = 'table-class';
+  const legend = document.createElement('legend');
+  legend.textContent = `${t.label} is a`;
+  group.appendChild(legend);
+  const options = [
+    ['auto', `Tool's guess (${CLASS_NAMES[t.guess]})`],
+    ['data', 'Data table'],
+    ['layout', 'Layout table'],
+  ];
+  for (const [value, text] of options) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = `table-class-${i}`;
+    input.value = value;
+    input.dataset.key = t.key;
+    input.checked = (t.confirmed || 'auto') === value;
+    label.append(input, ` ${text}`);
+    group.appendChild(label);
+  }
+  li.appendChild(group);
+
+  if (t.issues.length) {
+    const ul = document.createElement('ul');
+    ul.className = 'table-issues';
+    for (const issue of t.issues) {
+      const item = document.createElement('li');
+      item.textContent = `${issue.severity}: ${issue.text}`;
+      ul.appendChild(item);
+    }
+    li.appendChild(ul);
+  }
+
+  const evidence = document.createElement('details');
+  evidence.className = 'table-evidence';
+  const sum = document.createElement('summary');
+  sum.textContent = 'Why the tool guessed this';
+  const ev = document.createElement('ul');
+  for (const [side, items] of [['Signs of data', t.signals.data], ['Signs of layout', t.signals.layout]]) {
+    const item = document.createElement('li');
+    item.textContent = `${side}: ${items.length ? items.join(', ') : 'none'}.`;
+    ev.appendChild(item);
+  }
+  evidence.append(sum, ev);
+  li.appendChild(evidence);
+
+  const check = document.createElement('p');
+  check.className = 'table-check';
+  check.textContent = t.check;
+  li.appendChild(check);
+
+  return li;
+}
+
+async function renderStoredTables(focus = null) {
   const stored = (await chrome.storage.session.get(tablesKey()))[tablesKey()];
-  renderTables(stored && normUrl(stored.url) === normUrl(tab.url) ? stored.tables : null);
+  renderTables(stored && normUrl(stored.url) === normUrl(tab.url) ? stored.tables : null, focus);
 }
 
 // Save the tester's Data / Layout choice ('auto' removes it), then check
@@ -1091,8 +1231,7 @@ async function setTableClass(key, value) {
   else all[key] = value;
   if (Object.keys(all).length) await chrome.storage.local.set({ [k]: all });
   else await chrome.storage.local.remove(k);
-  const { count, tables } = await execTables(TABLES_ENTRY(), { draw: false });
-  renderTables(tables, { key, value });
+  const { count } = await execTables(TABLES_ENTRY(), { draw: false, focus: { key, value } });
   announce(`tables: saved. ${count} findings.`);
 }
 
@@ -1161,7 +1300,8 @@ function execEntry(entry, opts = {}) {
 }
 
 async function runFromButton(button, entry) {
-  button.disabled = true;
+  if (isBusy(button)) return;
+  setBusy(button, true);
   banner('');
   try {
     const { tool, count, note } = await execEntry(entry);
@@ -1169,7 +1309,7 @@ async function runFromButton(button, entry) {
   } catch (e) {
     checkerError(e);
   } finally {
-    button.disabled = false;
+    setBusy(button, false);
   }
 }
 
@@ -1198,7 +1338,8 @@ async function initBatchSelection() {
 
 async function runBatch() {
   const btn = $('run-selected');
-  btn.disabled = true;
+  if (isBusy(btn)) return;
+  setBusy(btn, true);
   banner('');
   const selected = new Set(
     [...document.querySelectorAll('.batch-select')]
@@ -1210,9 +1351,10 @@ async function runBatch() {
   const queue = CHECKERS.filter((e) => selected.has(e.id));
   if (!queue.length) {
     banner('Nothing selected — tick the checkbox on at least one checker.');
-    btn.disabled = false;
+    setBusy(btn, false);
     return;
   }
+  announce(`Running ${queue.length} checker${queue.length === 1 ? '' : 's'}…`);
   const errors = [];
   let total = 0;
   let ran = 0;
@@ -1238,7 +1380,7 @@ async function runBatch() {
       (errors.length ? `; ${errors.length} skipped/failed` : '')
   );
   if (errors.length) banner(errors.join(' · '));
-  btn.disabled = false;
+  setBusy(btn, false);
 }
 
 async function refreshTextSpacingButton() {
@@ -1338,18 +1480,19 @@ function wireCheckers() {
 
   // Reload and record: the SW installs a page-world hook, reloads the tab and
   // waits for the load; then the audio checker runs with the hook's records.
-  // While it runs, recordingAudio keeps the button disabled through the side
-  // panel's restricted-UI reset and skips the panel's reload refresh (the run
-  // re-syncs the labels itself when it ends). It also holds `tab` fixed: a tab
+  // While it runs, the button stays busy (the side panel's restricted-UI
+  // reset does not clear that), and recordingAudio skips the panel's reload
+  // refresh (the run re-syncs the labels itself when it ends). It also holds `tab` fixed: a tab
   // switch in the side panel is deferred until the run ends, so the reload and
   // the checker always target the same tab. No injection carries the click's
   // gesture (they all go through the SW), so the checker runs as soon as the
   // page has settled.
   $('record-audio').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    if (isBusy(btn)) return;
     const recordedTabId = tab.id;
     recordingAudio = true;
-    btn.disabled = true;
+    setBusy(btn, true);
     banner('');
     try {
       announce('audio: reloading the page with recording hooks…');
@@ -1380,7 +1523,7 @@ function wireCheckers() {
       checkerError(err);
     } finally {
       recordingAudio = false;
-      btn.disabled = false;
+      setBusy(btn, false);
       if (tabSwitchedWhileRecording) {
         tabSwitchedWhileRecording = false;
         refreshForActiveTab();
@@ -1392,7 +1535,8 @@ function wireCheckers() {
   // in every frame. Ask the page, not the label (popup and side panel).
   $('toggle-tables-overlay').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
-    btn.disabled = true;
+    if (isBusy(btn)) return;
+    setBusy(btn, true);
     banner('');
     try {
       const markers = await pageMarkers();
@@ -1408,7 +1552,7 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      btn.disabled = false;
+      setBusy(btn, false);
     }
   });
 
@@ -1416,7 +1560,8 @@ function wireCheckers() {
   // overlay (and ends Linearize) in every frame.
   $('toggle-css-position-overlay').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
-    btn.disabled = true;
+    if (isBusy(btn)) return;
+    setBusy(btn, true);
     banner('');
     try {
       const markers = await pageMarkers();
@@ -1433,7 +1578,7 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      btn.disabled = false;
+      setBusy(btn, false);
     }
   });
 
@@ -1441,7 +1586,8 @@ function wireCheckers() {
   // to its reading-order place.
   $('toggle-css-linearize').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
-    btn.disabled = true;
+    if (isBusy(btn)) return;
+    setBusy(btn, true);
     banner('');
     try {
       const markers = await pageMarkers();
@@ -1454,7 +1600,7 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      btn.disabled = false;
+      setBusy(btn, false);
     }
   });
 
@@ -1475,7 +1621,8 @@ function wireCheckers() {
   });
 
   $('toggle-text-spacing').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     try {
       await inject([...LIBS, 'checkers/text-spacing.js'], true);
       const applied = (await callChecker('textSpacing', 'status'))[0].result.applied;
@@ -1484,12 +1631,13 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 
   $('toggle-accname').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     try {
       await inject([...LIBS, 'checkers/lib/accname.js', 'checkers/accname-inspector.js']);
       const starting = e.target.textContent.startsWith('Start');
@@ -1504,13 +1652,14 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 
   // Focus locator: watches focus while the tester presses Tab by hand.
   $('toggle-focus-locator').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     try {
       await inject(LOCATOR_FILES);
       // Ask the page, not the button label: the popup and the side panel can
@@ -1527,7 +1676,7 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 
@@ -1535,7 +1684,8 @@ function wireCheckers() {
   // Results arrive as errorCaptureUpdate messages (wired in init); Stop
   // stores the final set before it removes the capture.
   $('toggle-error-capture').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     try {
       await inject(ERROR_FILES);
       // Ask the page, not the button label (the popup and the side panel can
@@ -1559,14 +1709,15 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 
   // Input watcher: logs what the tester's own field changes cause. The SW
   // keeps the log (it outlives a navigation); the page script reports to it.
   $('toggle-input-watcher').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     try {
       await inject(WATCH_FILES);
       const [status] = await callChecker('inputWatcher', 'status');
@@ -1594,12 +1745,13 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 
   $('toggle-live-regions').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     try {
       await inject(LIVE_FILES);
       const starting = e.target.textContent.startsWith('Start');
@@ -1618,7 +1770,7 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 
@@ -1665,7 +1817,8 @@ function wireCheckers() {
   // Data / Layout choices stay). Motion/reflow/
   // hover leave nothing behind.
   $('clear-all-checkers').addEventListener('click', async (e) => {
-    e.target.disabled = true;
+    if (isBusy(e.target)) return;
+    setBusy(e.target, true);
     banner('');
     try {
       // The SW log first: it needs no page access, so a failed injection
@@ -1710,7 +1863,7 @@ function wireCheckers() {
     } catch (err) {
       checkerError(err);
     } finally {
-      e.target.disabled = false;
+      setBusy(e.target, false);
     }
   });
 }
@@ -1734,6 +1887,7 @@ function wireReport() {
     if (more) {
       expandedTools.add(more.dataset.tool);
       if (lastStore) renderReport(lastStore);
+      announce(`${more.dataset.tool}: showing all findings.`);
     }
   });
 
@@ -1758,7 +1912,10 @@ function wireReport() {
     });
   });
 
-  $('clear-findings').addEventListener('click', clearFindingsStore);
+  $('clear-findings').addEventListener('click', async () => {
+    await clearFindingsStore();
+    announce('Cleared the findings for this tab.');
+  });
 
   $('clear-history').addEventListener('click', async () => {
     const prefix = `history:${normUrl(tab.url)}:`;
@@ -1778,22 +1935,27 @@ function setRestrictedUI(on) {
   for (const el of document.querySelectorAll('input, button')) el.disabled = on;
   if (!on) {
     // Re-apply state-dependent disables the blanket enable just cleared;
-    // renderState corrects these again as soon as fresh state arrives.
+    // renderState corrects these again as soon as fresh state arrives. A
+    // running Reload and record or Auto-update watch keeps its button busy
+    // (aria-disabled), which this reset does not touch.
     const reflowOn = !!(lastState && lastState.reflow);
     $('run-reflow-scan').disabled = !reflowOn;
     const reflowBatchBox = document.querySelector('.batch-select[data-batch-id="reflow"]');
     if (reflowBatchBox) reflowBatchBox.disabled = !reflowOn;
-    $('record-audio').disabled = recordingAudio;
-    $('run-auto-update').disabled = autoUpdateRunning;
   }
 }
 
 // Re-resolves the active tab and re-renders everything that is per-tab. The
 // popup runs this once; the side panel re-runs it on tab switch/navigation.
 let refreshToken = 0;
+// The focus a refresh took before its clear, until a refresh draws again. A
+// newer refresh can start after an older one's clear and before its redraw
+// (an SPA route change fires two close together): it uses this instead.
+let refreshFocus = null;
 
 async function refreshForActiveTab() {
   const token = ++refreshToken; // last-wins guard against rapid tab switches
+  const prevTabId = tab && tab.id;
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (token !== refreshToken) return;
   tab = active;
@@ -1801,11 +1963,27 @@ async function refreshForActiveTab() {
   setRestrictedUI(restricted);
 
   // Clear per-tab UI before any early return — a switch to a restricted tab
-  // must not leave the previous tab's findings on screen.
+  // must not leave the previous tab's findings on screen. For the same tab
+  // (the side panel refreshes on its reload or route change while the
+  // tester works in the panel), focus in the report or on a Tables radio is
+  // taken first, so the renders below can put it back. Another tab is a new
+  // context: focus is not carried over.
+  const sameTab = prevTabId === (tab && tab.id);
+  const radio = sameTab && document.activeElement && document.activeElement.closest('#tables-list input[type="radio"]');
+  let keep = sameTab
+    ? { report: reportFocus($('findings-groups')), table: radio ? { key: radio.dataset.key, value: radio.value } : null }
+    : null;
+  // Only while focus is still where an older refresh's clear left it, so a
+  // tester who has moved on keeps their own focus.
+  const leftByClear = [$('report-summary'), document.body].includes(document.activeElement);
+  if (keep && !keep.report && !keep.table && leftByClear && refreshFocus) keep = refreshFocus;
+  refreshFocus = keep;
+  const reportKey = keep ? keep.report : undefined;
+  const tableFocus = keep ? keep.table : null;
   banner('');
   for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
   $('batch-progress').textContent = '';
-  renderReport({ url: tab && tab.url, tools: {} });
+  renderReport({ url: tab && tab.url, tools: {} }, reportKey);
   renderTables(null);
   if (restricted) return;
 
@@ -1814,9 +1992,10 @@ async function refreshForActiveTab() {
   if (res && res.ok) renderState(res.state, res.caps);
   const store = await getStore();
   if (token !== refreshToken) return;
-  renderReport(store);
-  await renderStoredTables();
+  renderReport(store, reportKey);
+  await renderStoredTables(tableFocus);
   if (token !== refreshToken) return;
+  refreshFocus = null;
   refreshTextSpacingButton();
   // One read of the page markers for every label (and a watch to resume).
   const markers = pageMarkers();

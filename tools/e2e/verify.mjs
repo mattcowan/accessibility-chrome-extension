@@ -324,12 +324,13 @@ async function silentSections() {
     await env.popup
       .waitForFunction(() => /Watching… \d s/.test(document.getElementById('auto-update-progress').textContent), null, { timeout: 10000 })
       .catch(() => {});
+    // Busy, not disabled: a disabled button would drop keyboard focus (#6).
     const during = await env.popup.evaluate(() => ({
       progress: document.getElementById('auto-update-progress').textContent,
-      disabled: document.getElementById('run-auto-update').disabled,
+      busy: document.getElementById('run-auto-update').getAttribute('aria-disabled') === 'true',
       status: document.getElementById('status').textContent,
     }));
-    check('[auto-update] the popup shows that it is watching', /Watching… \d s/.test(during.progress) && during.disabled && /watching the page for 6 seconds/.test(during.status), JSON.stringify(during));
+    check('[auto-update] the popup shows that it is watching', /Watching… \d s/.test(during.progress) && during.busy && /watching the page for 6 seconds/.test(during.status), JSON.stringify(during));
     await env.popup.waitForFunction(() => /^auto-update: \d+ findings \(watched 6 seconds\)/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
     const f = await storedFindings(env, tabId, 'auto-update');
     const show = JSON.stringify(f.map((x) => [x.wcag, x.severity, x.selector, x.details.slice(0, 100)]));
@@ -413,7 +414,7 @@ async function silentSections() {
     await env.popup.click('#run-auto-update');
     await autoUpdateMarker(page, 'watching');
     await page.reload();
-    await env.popup.waitForFunction(() => !document.getElementById('run-auto-update').disabled, null, { timeout: 20000 });
+    await env.popup.waitForFunction(() => document.getElementById('run-auto-update').getAttribute('aria-disabled') !== 'true', null, { timeout: 20000 });
     const reloaded = await env.popup.evaluate(() => document.getElementById('banner').textContent);
     check('[auto-update] a reload during the watch says nothing was reported', /navigated or reloaded during the auto-update watch/.test(reloaded), reloaded);
 
@@ -1221,6 +1222,192 @@ async function silentSections() {
     await page.close();
   }
   await env.ctx.close();
+
+  // ============ #6: the popup's own accessibility ============
+  env = await launch('no-user-gesture-required');
+  {
+    const { page, tabId } = await openFixture(env, 'tables.html');
+    const active = () => env.popup.evaluate(() => {
+      const a = document.activeElement;
+      return { tag: a.tagName, id: a.id, sel: a.dataset.selector || null, text: a.textContent.trim() };
+    });
+
+    // Show all: the button goes away; focus moves to the first row it added.
+    await env.popup.evaluate(async ({ tabId, url }) => {
+      const findings = Array.from({ length: 40 }, (_, i) => ({ tool: 'target-size', wcag: '2.5.8', severity: 'warn', selector: `#t${i}`, snippet: '', details: `Row ${i}`, url, timestamp: '', status: 'new' }));
+      await chrome.storage.session.set({ [`findings:${tabId}`]: { url, tools: { 'target-size': { findings, resolved: [] } } } });
+    }, { tabId, url: page.url() });
+    await env.popup.reload();
+    await env.popup.waitForFunction(() => document.querySelector('.show-all'));
+    await env.popup.bringToFront();
+    await env.popup.evaluate(() => { document.querySelector('details.tool-group').open = true; });
+    await env.popup.focus('.show-all');
+    await env.popup.keyboard.press('Enter');
+    const afterShowAll = await active();
+    check('[popup #6] Show all puts focus on the first row it added', afterShowAll.sel === '#t30', JSON.stringify(afterShowAll));
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+
+    // Names, structure, badges, finding rows.
+    const runNames = { 'run-motion': 'Motion respect', 'run-audio': 'Audio autoplay', 'run-auto-update': 'Auto-update', 'run-focus': 'Focus visibility', 'run-keyboard-access': 'Keyboard access', 'run-form-labels': 'Form labels', 'run-tables': 'Tables', 'run-css-position': 'CSS positioning', 'run-target-size': 'Target size', 'run-hover': 'Hover/focus content' };
+    const unnamed = [];
+    for (const [id, name] of Object.entries(runNames)) {
+      if ((await env.popup.getByRole('button', { name: `Run ${name}`, exact: true }).getAttribute('id')) !== id) unnamed.push(id);
+    }
+    check('[popup #6] each Run button names its checker', !unnamed.length, unnamed.join(', '));
+    const overlayNamed = (await env.popup.getByRole('button', { name: 'Show overlay Tables', exact: true }).count()) === 1;
+    check('[popup #6] the overlay toggles name their checker', overlayNamed);
+    const structure = await env.popup.evaluate(() => ({
+      h2: [...document.querySelectorAll('h2')].map((h) => h.textContent),
+      main: !!document.querySelector('main fieldset#report'),
+    }));
+    check('[popup #6] each section has an h2 inside main', structure.main && structure.h2.join('|') === 'Emulation modes|Vision simulation|Checkers|Report', JSON.stringify(structure));
+    const badges = await env.popup.evaluate(() => [...document.querySelectorAll('.badge')].map((b) => ({ id: b.id, text: b.textContent, shown: getComputedStyle(b).display !== 'none' })));
+    const badText = badges.filter((b) => b.shown && !/^(\d+ (fail|warn|review)|0 found)$/.test(b.text));
+    check('[popup #6] badges say the severity in words', badges.some((b) => b.shown) && !badText.length, JSON.stringify(badText));
+    const unrun = badges.find((b) => b.id === 'badge-auto-update');
+    check('[popup #6] a badge with no run is not drawn', unrun && !unrun.shown, JSON.stringify(unrun));
+    const rows = await env.popup.evaluate(() => ({
+      buttons: document.querySelectorAll('.finding-reveal').length,
+      nested: document.querySelectorAll('.finding-reveal .finding-details').length,
+      longest: Math.max(0, ...[...document.querySelectorAll('.finding-reveal')].map((b) => b.textContent.length)),
+    }));
+    check('[popup #6] a finding button holds the head line only', rows.buttons > 0 && rows.nested === 0 && rows.longest < 200, JSON.stringify(rows));
+    const pitch = await env.popup.evaluate(() => {
+      const y = [...document.querySelectorAll('#vision input')].filter((e) => e.checkVisibility()).map((e) => e.getBoundingClientRect().top);
+      return Math.min(...y.slice(1).map((v, i) => v - y[i]));
+    });
+    check('[popup #6] Vision radios are at least 24px apart', pitch >= 24, String(pitch));
+    await env.popup.emulateMedia({ colorScheme: 'dark' });
+    const cleanColor = await env.popup.evaluate(() => getComputedStyle(document.querySelector('.badge.clean')).color);
+    check('[popup #6] dark mode: the "0 found" badge text is dark', cleanColor === 'rgb(5, 46, 43)', cleanColor);
+    await env.popup.emulateMedia({ colorScheme: 'light' });
+
+    // Focus stays on the pressed button (a disabled button drops it to <body>).
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.focus('#run-form-labels');
+    await env.popup.keyboard.press('Enter');
+    await env.popup.waitForFunction(() => /^form-labels: \d+ findings/.test(document.getElementById('status').textContent));
+    const afterRun = await env.popup.evaluate(() => ({ id: document.activeElement.id, busy: document.activeElement.getAttribute('aria-disabled') }));
+    check('[popup #6] focus stays on Run after a keyboard run', afterRun.id === 'run-form-labels' && afterRun.busy === null, JSON.stringify(afterRun));
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.focus('#toggle-focus-locator');
+    await env.popup.keyboard.press('Enter');
+    await env.popup.waitForFunction(() => /focus locator: on/.test(document.getElementById('status').textContent));
+    const afterToggle = await active();
+    check('[popup #6] a toggle keeps focus and shows its new name', afterToggle.id === 'toggle-focus-locator' && afterToggle.text === 'Stop locator', JSON.stringify(afterToggle));
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.keyboard.press('Enter');
+    await env.popup.waitForFunction(() => /focus locator: off/.test(document.getElementById('status').textContent));
+
+    // Tables: a changed choice keeps the same radio element in the DOM.
+    await env.popup.evaluate(() => {
+      const item = document.querySelector('#tables-list .table-item');
+      window.__dataRadio = item.querySelector('input[value="data"]');
+      item.querySelector('input[value="auto"]').focus();
+      document.getElementById('status').textContent = '';
+    });
+    await env.popup.keyboard.press('ArrowDown');
+    await env.popup.waitForFunction(() => /^tables: saved/.test(document.getElementById('status').textContent), null, { timeout: 60000 });
+    const kept = await env.popup.evaluate(() => ({ same: document.activeElement === window.__dataRadio, connected: window.__dataRadio.isConnected, checked: window.__dataRadio.checked }));
+    check('[popup #6] a changed table choice keeps its radio focused, not replaced', kept.same && kept.connected && kept.checked, JSON.stringify(kept));
+    await env.popup.evaluate(() => (document.getElementById('status').textContent = ''));
+    await env.popup.keyboard.press('ArrowUp');
+    await env.popup.waitForFunction(() => /^tables: saved/.test(document.getElementById('status').textContent), null, { timeout: 60000 });
+
+    // Side panel at 320px: no horizontal scroll (WCAG 1.4.10). A new page is
+    // the active tab, so bring the fixture back and reload the panel: it
+    // binds to the active tab at init (its onActivated listener is added only
+    // at the end of init, so a switch right after goto can be missed).
+    const panel = await env.ctx.newPage();
+    await panel.setViewportSize({ width: 320, height: 800 });
+    await panel.goto(`chrome-extension://${env.id}/popup/popup.html?context=panel`);
+    await page.bringToFront();
+    await panel.reload();
+    await panel.waitForFunction(() => document.querySelector('.badge:not([hidden])') && document.querySelector('#tables-list .table-item'), null, { timeout: 15000 });
+    const width = await panel.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    check('[popup #6] the side panel fits 320px with no horizontal scroll', width.scroll <= width.client, JSON.stringify(width));
+
+    // Re-renders keep focus (#6 review). The panel redraws when the popup
+    // stores findings or a Tables list. `redraws` counts mutations of a list.
+    const watchRedraws = (sel) => panel.evaluate((s) => {
+      window.__redraws = 0;
+      new MutationObserver(() => window.__redraws++).observe(document.querySelector(s), { childList: true, subtree: true });
+    }, sel);
+    const redrawn = () => panel.waitForFunction(() => window.__redraws > 0, null, { timeout: 60000 }).then(() => sleep(300));
+    for (const [label, sel] of [['the table reveal button', '#tables-list .table-reveal'], ['the evidence summary', '#tables-list .table-evidence summary']]) {
+      await panel.evaluate((s) => { window.__kept = document.querySelector(s); window.__kept.focus(); }, sel);
+      await watchRedraws('#tables-list');
+      await clickAndWait(env, 'run-tables', /^tables:/);
+      await redrawn();
+      const kept = await panel.evaluate(() => ({ same: document.activeElement === window.__kept, connected: window.__kept.isConnected }));
+      check(`[popup #6] a Tables redraw keeps focus on ${label}`, kept.same && kept.connected, JSON.stringify(kept));
+    }
+    const writeTargets = (note) => env.popup.evaluate(async ({ tabId, url, note }) => {
+      const key = `findings:${tabId}`;
+      const store = (await chrome.storage.session.get(key))[key];
+      store.tools['target-size'] = { resolved: [], findings: Array.from({ length: 40 }, (_, i) => ({ tool: 'target-size', wcag: '2.5.8', severity: 'warn', selector: `#t${i}`, snippet: '', details: `Row ${i} ${note}`, url, timestamp: '', status: 'new' })) };
+      await chrome.storage.session.set({ [key]: store });
+    }, { tabId, url: page.url(), note });
+    await watchRedraws('#findings-groups');
+    await writeTargets('a');
+    await redrawn();
+    await panel.evaluate(() => {
+      document.querySelector('details.tool-group[data-tool="target-size"]').open = true;
+      document.querySelector('details.tool-group[data-tool="target-size"] .show-all').focus();
+    });
+    await watchRedraws('#findings-groups');
+    await writeTargets('b');
+    await redrawn();
+    const onShowAll = await panel.evaluate(() => document.activeElement.classList.contains('show-all'));
+    check('[popup #6] a redraw keeps focus on Show all that was not pressed', onShowAll);
+
+    // A reload of the tracked tab refreshes the panel (it clears the report
+    // and the Tables list, then draws them again); focus stays put. Each
+    // check waits for the redraw first: focus is already in place before it.
+    await panel.evaluate(() => document.querySelector('details.tool-group[data-tool="target-size"] .finding-reveal[data-selector="#t5"]').focus());
+    await watchRedraws('#findings-groups');
+    await page.reload();
+    await panel.waitForFunction(() => window.__redraws > 0 && document.querySelector('details.tool-group[data-tool="target-size"]'), null, { timeout: 15000 });
+    await sleep(300);
+    const rowBack = await panel.evaluate(() => document.activeElement.dataset.selector === '#t5');
+    check('[popup #6] a reload of the page keeps focus on the same finding in the side panel', rowBack, await panel.evaluate(() => document.activeElement.outerHTML.slice(0, 120)));
+    await panel.waitForFunction(() => document.querySelector('#tables-list .table-item input[value="layout"]'), null, { timeout: 15000 });
+    const radio = await panel.evaluate(() => {
+      const r = document.querySelector('#tables-list .table-item input[value="layout"]');
+      r.focus();
+      return { key: r.dataset.key, value: r.value };
+    });
+    await watchRedraws('#tables-list');
+    await page.reload();
+    await panel.waitForFunction(() => window.__redraws > 0 && document.querySelector('#tables-list .table-item'), null, { timeout: 15000 });
+    await sleep(300);
+    const radioBack = await panel.evaluate((r) => document.activeElement.dataset.key === r.key && document.activeElement.value === r.value, radio);
+    check('[popup #6] a reload of the page keeps focus on the same Tables radio in the side panel', radioBack, await panel.evaluate(() => document.activeElement.outerHTML.slice(0, 120)));
+    await panel.close();
+
+    // The same announcement twice must change the status text, or NVDA stays
+    // silent the second time (PR #35 review, verified with NVDA).
+    const revealSel = 'details.tool-group[data-tool="tables"] .finding-reveal';
+    await env.popup.evaluate(() => {
+      document.querySelector('details.tool-group[data-tool="tables"]').open = true;
+      document.getElementById('status').textContent = '';
+    });
+    await env.popup.click(revealSel);
+    await env.popup.waitForFunction(() => /^Highlighted on the page/.test(document.getElementById('status').textContent), null, { timeout: 20000 });
+    const firstSay = await env.popup.evaluate(() => document.getElementById('status').textContent);
+    await env.popup.click(revealSel);
+    const secondSay = await env.popup
+      .waitForFunction((t) => document.getElementById('status').textContent !== t && document.getElementById('status').textContent, firstSay, { timeout: 20000 })
+      .then((h) => h.jsonValue(), () => firstSay);
+    check('[popup #6] a repeated announcement changes the status text', secondSay !== firstSay && secondSay.trim() === firstSay.trim(), JSON.stringify([firstSay, secondSay]));
+
+    await clickAndWait(env, 'clear-findings', /^Cleared the findings/);
+    check('[popup #6] Clear findings is announced', true);
+    await page.close();
+  }
+  await env.ctx.close();
 }
 
 // The audio checker (1.4.2 / TT 2.A) and Reload and record: real sound.
@@ -1370,19 +1557,21 @@ async function audioSections() {
   env = await launch('document-user-activation-required', { panel: true, sound: true });
   {
     const { page, tabId } = await openFixture(env, 'audio-autoplay.html', 500);
-    // Watch for the record button re-enabling before the cycle finishes.
+    // Watch for the record button leaving its busy state (aria-disabled, #6)
+    // before the cycle finishes; the panel's restricted-UI reset must not
+    // clear it.
     await env.popup.evaluate(() => {
       window.__enabledEarly = false;
       const b = document.getElementById('record-audio');
       new MutationObserver(() => {
         const done = /after a recorded reload/.test(document.getElementById('status').textContent);
-        if (!b.disabled && !done) window.__enabledEarly = true;
-      }).observe(b, { attributes: true, attributeFilter: ['disabled'] });
+        if (b.getAttribute('aria-disabled') !== 'true' && !done) window.__enabledEarly = true;
+      }).observe(b, { attributes: true, attributeFilter: ['disabled', 'aria-disabled'] });
     });
     await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
     await clickAndWait(env, 'record-audio', /after a recorded reload/);
     const early = await env.popup.evaluate(() => window.__enabledEarly);
-    check('[panel recorded] record button stays disabled for the whole cycle', !early, 'button re-enabled mid-cycle');
+    check('[panel recorded] record button stays busy for the whole cycle', !early, 'button left its busy state mid-cycle');
     const f = await storedFindings(env, tabId, 'audio');
     const exps = await expectations(env, tabId, 'data-expect-recorded');
     for (const e of exps) {

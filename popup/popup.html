@@ -19,10 +19,12 @@
     <div id="restricted-msg" class="banner" hidden>
       Emulation and checkers aren't available on this page (browser or store pages).
     </div>
+    <div id="status" class="status-line" role="status" aria-live="polite"></div>
   </header>
 
+  <main>
   <fieldset id="emulation">
-    <legend>Emulation modes</legend>
+    <legend><h2>Emulation modes</h2></legend>
     <div class="row">
       <label><input type="checkbox" id="toggle-reduced-motion"> Reduced motion</label>
       <small>prefers-reduced-motion: reduce</small>
@@ -60,7 +62,7 @@
   </fieldset>
 
   <fieldset id="vision">
-    <legend>Vision simulation</legend>
+    <legend><h2>Vision simulation</h2></legend>
     <label><input type="radio" name="vision" id="vision-none" value="none" checked> None</label>
     <label><input type="radio" name="vision" id="vision-protanopia" value="protanopia"> Protanopia (no red)</label>
     <label><input type="radio" name="vision" id="vision-deuteranopia" value="deuteranopia"> Deuteranopia (no green)</label>
@@ -71,27 +73,28 @@
   </fieldset>
 
   <fieldset id="checkers">
-    <legend>Checkers</legend>
+    <legend><h2>Checkers</h2></legend>
     <div class="checker-row batch-row">
-      <button type="button" id="run-selected">Run selected</button>
+      <button type="button" id="run-selected" aria-describedby="batch-hint">Run selected</button>
       <span id="batch-progress"></span>
+      <small id="batch-hint" class="batch-hint">Runs each checker whose box is ticked, one after another.</small>
     </div>
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="motion"
         title="Include in Run selected" aria-label="Include Motion respect in Run selected">
-      <span class="name">Motion respect <small>2.3.3 / 2.2.2 — best with Reduced motion ON</small>
+      <span class="name"><span id="name-motion">Motion respect</span> <small>2.3.3 / 2.2.2 — best with Reduced motion ON</small>
         <label class="inline-toggle" title="Emulate prefers-reduced-motion: reduce (same as the Emulation toggle above)">
           <input type="checkbox" id="toggle-reduced-motion-inline"> Reduced motion
         </label>
       </span>
-      <button type="button" id="run-motion">Run</button>
+      <button type="button" id="run-motion" aria-labelledby="run-motion name-motion">Run</button>
       <span class="badge" id="badge-motion" hidden></span>
     </div>
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="audio"
         title="Include in Run selected" aria-label="Include Audio autoplay in Run selected">
-      <span class="name">Audio autoplay <small>1.4.2 / TT 2.A</small></span>
-      <button type="button" id="run-audio">Run</button>
+      <span class="name"><span id="name-audio">Audio autoplay</span> <small>1.4.2 / TT 2.A</small></span>
+      <button type="button" id="run-audio" aria-labelledby="run-audio name-audio">Run</button>
       <button type="button" id="record-audio" class="secondary"
         title="Reload the page with recording hooks to catch audio that scripts start, including attempts the browser blocked">
         Reload and record
@@ -101,12 +104,12 @@
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="auto-update"
         title="Include in Run selected (watches the page first, before the other checkers)" aria-label="Include Auto-update in Run selected">
-      <span class="name">Auto-update <small>2.2.2 / 4.1.2 (TT 2.C, 2.D) — content that changes on its own</small>
+      <span class="name"><span id="name-auto-update">Auto-update</span> <small>2.2.2 / 4.1.2 (TT 2.C, 2.D) — content that changes on its own</small>
         <label class="inline-toggle" title="How long to watch, in whole seconds (1 to 300; default 10)">
           Watch for <input type="number" id="auto-update-seconds" min="1" max="300" step="1" value="10"> seconds
         </label>
       </span>
-      <button type="button" id="run-auto-update"
+      <button type="button" id="run-auto-update" aria-labelledby="run-auto-update name-auto-update"
         title="Watch the page for the set time and report content that updates on its own: whether a control can pause it, and how the user is told about each update. Do not touch the page while it watches.">Run</button>
       <span id="auto-update-progress"></span>
       <span class="badge" id="badge-auto-update" hidden></span>
@@ -122,8 +125,8 @@
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="focus-visibility"
         title="Include in Run selected" aria-label="Include Focus visibility in Run selected">
-      <span class="name">Focus visibility <small>2.4.7</small></span>
-      <button type="button" id="run-focus">Run</button>
+      <span class="name"><span id="name-focus">Focus visibility</span> <small>2.4.7</small></span>
+      <button type="button" id="run-focus" aria-labelledby="run-focus name-focus">Run</button>
       <span class="badge" id="badge-focus" hidden></span>
     </div>
     <div class="checker-row">
@@ -134,8 +137,8 @@
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="keyboard-access"
         title="Include in Run selected" aria-label="Include Keyboard access in Run selected">
-      <span class="name">Keyboard access <small>2.1.1 / TT 4.A — mouse-only elements</small></span>
-      <button type="button" id="run-keyboard-access"
+      <span class="name"><span id="name-keyboard-access">Keyboard access</span> <small>2.1.1 / TT 4.A — mouse-only elements</small></span>
+      <button type="button" id="run-keyboard-access" aria-labelledby="run-keyboard-access name-keyboard-access"
         title="Find elements a mouse can operate but Tab cannot reach. Reads click listeners through the debugger (the debugging bar shows briefly).">
         Run
       </button>
@@ -144,18 +147,18 @@
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="form-labels"
         title="Include in Run selected" aria-label="Include Form labels in Run selected">
-      <span class="name">Form labels <small>1.3.1 / TT 5.C — group labels, required cues, repeated names</small></span>
-      <button type="button" id="run-form-labels"
+      <span class="name"><span id="name-form-labels">Form labels</span> <small>1.3.1 / TT 5.C — group labels, required cues, repeated names</small></span>
+      <button type="button" id="run-form-labels" aria-labelledby="run-form-labels name-form-labels"
         title="Find radio and checkbox groups with no group label, required cues that do not match the field, and fields with the same name. It only reads the form.">Run</button>
       <span class="badge" id="badge-form-labels" hidden></span>
     </div>
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="tables"
         title="Include in Run selected" aria-label="Include Tables in Run selected">
-      <span class="name">Tables <small>1.3.1 / TT section 14 — data or layout table, and its markup</small></span>
-      <button type="button" id="run-tables"
+      <span class="name"><span id="name-tables">Tables</span> <small>1.3.1 / TT section 14 — data or layout table, and its markup</small></span>
+      <button type="button" id="run-tables" aria-labelledby="run-tables name-tables"
         title="Find every table, guess whether it is a data table or a layout table, check its markup, and outline it on the page. Reads Chrome's table roles through the debugger (the debugging bar shows briefly).">Run</button>
-      <button type="button" id="toggle-tables-overlay" class="secondary"
+      <button type="button" id="toggle-tables-overlay" class="secondary" aria-labelledby="toggle-tables-overlay name-tables"
         title="Show or hide the table outlines and header colors on the page">Show overlay</button>
       <span class="badge" id="badge-tables" hidden></span>
     </div>
@@ -166,10 +169,10 @@
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="css-position"
         title="Include in Run selected" aria-label="Include CSS positioning in Run selected">
-      <span class="name">CSS positioning <small>1.3.2 / TT 15.B — content that shows out of reading order</small></span>
-      <button type="button" id="run-css-position"
+      <span class="name"><span id="name-css-position">CSS positioning</span> <small>1.3.2 / TT 15.B — content that shows out of reading order</small></span>
+      <button type="button" id="run-css-position" aria-labelledby="run-css-position name-css-position"
         title="Find content that CSS moves (absolute, fixed, relative with an offset, float, flex and grid reordering), compare where it shows with where a screen reader reads it, and outline it on the page.">Run</button>
-      <button type="button" id="toggle-css-position-overlay" class="secondary"
+      <button type="button" id="toggle-css-position-overlay" class="secondary" aria-labelledby="toggle-css-position-overlay name-css-position"
         title="Show or hide the outlines of moved content on the page">Show overlay</button>
       <button type="button" id="toggle-css-linearize" class="secondary"
         title="Remove the positioning and the flex/grid reordering from the moved content, so the page shows it in reading order (as ANDI's Linearize Page does for positioning). Content placed inside a moved element can move too: this is expected in the preview.">Linearize</button>
@@ -190,19 +193,21 @@
     <div class="checker-row">
       <input type="checkbox" class="batch-select" data-batch-id="target-size"
         title="Include in Run selected" aria-label="Include Target size in Run selected">
-      <span class="name">Target size <small>2.5.8</small></span>
-      <button type="button" id="run-target-size">Run</button>
+      <span class="name"><span id="name-target-size">Target size</span> <small>2.5.8</small></span>
+      <button type="button" id="run-target-size" aria-labelledby="run-target-size name-target-size">Run</button>
       <span class="badge" id="badge-target-size" hidden></span>
     </div>
     <div class="checker-row">
       <span class="batch-pair">
         <label title="Include the static hover pass in Run selected">
-          <input type="checkbox" class="batch-select" data-batch-id="hover-static"> static</label>
+          <input type="checkbox" class="batch-select" data-batch-id="hover-static"
+            aria-label="Include Hover/focus content static pass in Run selected"> static</label>
         <label title="Include the full pointer probe in Run selected (slow — moves the real mouse)">
-          <input type="checkbox" class="batch-select" data-batch-id="hover-probe"> probe</label>
+          <input type="checkbox" class="batch-select" data-batch-id="hover-probe"
+            aria-label="Include Hover/focus content pointer probe in Run selected (slow)"> probe</label>
       </span>
-      <span class="name">Hover/focus content <small>1.4.13</small></span>
-      <button type="button" id="run-hover">Run</button>
+      <span class="name"><span id="name-hover">Hover/focus content</span> <small>1.4.13</small></span>
+      <button type="button" id="run-hover" aria-labelledby="run-hover name-hover">Run</button>
       <span class="badge" id="badge-hover" hidden></span>
     </div>
     <div class="checker-row">
@@ -233,7 +238,7 @@
   </fieldset>
 
   <fieldset id="report">
-    <legend>Report</legend>
+    <legend><h2>Report</h2></legend>
     <div id="report-summary">No findings yet.</div>
     <div id="findings-groups"></div>
     <div class="row buttons">
@@ -242,8 +247,8 @@
       <button type="button" id="clear-history" class="secondary">Clear history for this URL</button>
     </div>
   </fieldset>
+  </main>
 
-  <div id="status" role="status" aria-live="polite" class="visually-hidden"></div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>
