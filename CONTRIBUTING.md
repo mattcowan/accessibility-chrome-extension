@@ -23,6 +23,8 @@ The extension has no build step, no bundler, and no TypeScript. Chrome loads the
    npx playwright install chromium
    ```
 
+   The end-to-end script has no install of its own. It uses the Playwright in `tools/keyboard-trap-scan`.
+
 After you change an extension file, click **Reload** (↻) on the extension's card in `chrome://extensions`. If you do not, Chrome can use an old `popup.js` with a new `popup.html`, and the popup buttons stop working.
 
 ## Test pages
