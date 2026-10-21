@@ -499,7 +499,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `chrome.debugger.getTargets()` always reports `attached: true` (Playwright's own
   session) — check the `tab:${id}` session state instead.
 - Scanner: `cd tools/keyboard-trap-scan && node scan.js
-  "file:///C:/wamp64/www/chrome-ext-accessibility-modes/test-pages/keyboard-trap.html"`
+  "file:///<absolute path to the repo>/test-pages/keyboard-trap.html"`
   → expect `fail`, exit 1; with `?escapable=1` → `warn`, exit 0;
   `focus-styles.html` → clean, exit 0.
 - Manual-only surface: popup UI interactions, infobar behavior, colorblind sims

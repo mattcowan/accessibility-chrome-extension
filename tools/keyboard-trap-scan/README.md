@@ -64,10 +64,16 @@ The scanner has several blind spots:
 
 ## Example
 
-Scan the local test page:
+Serve the repo's test pages first (from the repo root, with Python 3):
 
 ```bash
-node scan.js http://localhost/chrome-ext-accessibility-modes/test-pages/keyboard-trap.html
+python -m http.server 8000 --directory test-pages
+```
+
+Scan the keyboard-trap test page:
+
+```bash
+node scan.js http://localhost:8000/keyboard-trap.html
 ```
 
 Expected: Finds a hard trap and exits with code 1.
@@ -75,7 +81,7 @@ Expected: Finds a hard trap and exits with code 1.
 Scan with `escapable=1` query parameter (a version with an Escape exit):
 
 ```bash
-node scan.js "http://localhost/chrome-ext-accessibility-modes/test-pages/keyboard-trap.html?escapable=1"
+node scan.js "http://localhost:8000/keyboard-trap.html?escapable=1"
 ```
 
 Expected: Detects the trap, finds it escapable via Escape, flags as warn, and exits with code 0.
