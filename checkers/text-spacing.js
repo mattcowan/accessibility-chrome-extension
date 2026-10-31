@@ -12,6 +12,9 @@ if (!globalThis.__a11yTextSpacing) {
   (function () {
     const STYLE_ID = '__a11y-text-spacing';
     const F = globalThis.__a11yFindings;
+    // The extension's own page layers (live-region panels scroll their log)
+    // are not page content (#31).
+    const isTool = (el) => !!(el.closest && el.closest('[id^="__a11y"], .__a11y-live-panel'));
 
     const OVERRIDES =
       '* { line-height: 1.5 !important; letter-spacing: 0.12em !important;' +
@@ -59,6 +62,7 @@ if (!globalThis.__a11yTextSpacing) {
       const all = [];
       F.collectMatching(document, '*', all);
       for (const el of all) {
+        if (isTool(el)) continue;
         if (!el.clientWidth || !(el.textContent || '').trim()) continue;
         const style = getComputedStyle(el);
         if (visuallyHidden(el, style)) continue;

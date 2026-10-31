@@ -271,6 +271,14 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   LONGHAND at a time (the `grid-area` shorthand reads '' when the page set only
   `grid-column` inline, and restoring '' would wipe it — peer review 2026-10-16); a scan
   while linearized undoes it, measures, and re-applies; hide ends it.
+- `checkers/reflow-scan.js` (1.4.10) and `checkers/text-spacing.js` (1.4.12) skip
+  the extension's own page layers (`isTool`: `[id^="__a11y"]`, `.__a11y-live-panel`,
+  the same test forms.js/table.js/auto-update.js use). Overlay boxes keep the page
+  position they were drawn at, so after the 320 px override they read as 1.4.10
+  fails (#31). Skipped, not hidden during the measurement: hiding restyles a
+  layer the tester turned on, and the auto-update watch would see it. A badge
+  past 320 px can still give the page a scroll bar the page did not cause;
+  **Clear overlays** removes it.
 - `checkers/form-labels.js` (1.3.1 / TT 5.C, registry `kind: 'simple'`, allFrames,
   batchable) — group with no group label is `fail`, `review` when a member has
   aria-describedby, every member has table headers (bulk select), or a member's
@@ -478,7 +486,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when the user says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 457 checks on 2026-10-20 after the #6 popup fixes, their peer review and PR #35 round 1: 406 in the default (muted) run (+20 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 419 checks in the default (muted) run on 2026-10-31 after #31 (+13 `[reflow]`; the audio sections were not re-run). 457 checks on 2026-10-20 after the #6 popup fixes, their peer review and PR #35 round 1: 406 in the default (muted) run (+20 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,

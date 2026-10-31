@@ -10,6 +10,13 @@ if (!globalThis.__a11yReflowScan) {
     const F = globalThis.__a11yFindings;
     // Content for which 2-D scrolling is allowed by 1.4.10.
     const EXEMPT = new Set(['TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH', 'IMG', 'PRE', 'CODE', 'VIDEO', 'CANVAS', 'SVG', 'MAP', 'OBJECT', 'EMBED']);
+    // The extension's own page layers (overlay badges, focus locator, Tables
+    // and CSS positioning overlays, live-region panels). Boxes drawn at the
+    // wide layout keep their page position after the 320px override, so
+    // without this they read as 1.4.10 fails (#31). They are skipped, not
+    // hidden: hiding would restyle a layer the tester turned on, and the
+    // auto-update watch and the overlays' own observers would see it.
+    const isTool = (el) => !!(el.closest && el.closest('[id^="__a11y"], .__a11y-live-panel'));
 
     globalThis.__a11yCheckers.reflowScan = function reflowScan() {
       const findings = [];
@@ -34,6 +41,7 @@ if (!globalThis.__a11yReflowScan) {
       const all = [];
       F.collectMatching(document, '*', all);
       for (const el of all) {
+        if (isTool(el)) continue;
         const rect = el.getBoundingClientRect();
         if (rect.width < 2 || rect.height < 2) continue;
         if (rect.right > viewport + 1 + window.scrollX || rect.width > viewport + 1) {
