@@ -350,7 +350,7 @@ function renderBadge(tool, findings) {
 }
 
 async function clearFindingsStore() {
-  await chrome.storage.session.remove([findingsKey(), tablesKey()]);
+  await chrome.storage.session.remove([findingsKey(), tablesKey(), batchKey()]);
   for (const id of Object.values(BADGE_BY_TOOL)) $(id).hidden = true;
   renderReport({ url: tab.url, tools: {} });
   renderTables(null);
@@ -691,43 +691,45 @@ async function syncWatchFindings(state, { final = false } = {}) {
 // inspector, live-regions monitor, focus locator, error capture, input
 // watcher) are deliberately not batchable and stay outside the registry, as
 // does audio's Reload and record (it reloads the page, which would reset
-// what the other checkers measure).
+// what the other checkers measure). wcag: the criterion of the '(page)' review
+// that says a checker failed in a frame, or failed outright in a headless run
+// (tools/headless-run).
 const CHECKERS = [
   // Off by default in the batch: it adds the whole watch time to the run.
-  { id: 'auto-update', tool: 'auto-update', buttonId: 'run-auto-update', kind: 'auto-update',
+  { id: 'auto-update', tool: 'auto-update', wcag: '2.2.2', buttonId: 'run-auto-update', kind: 'auto-update',
     files: [...MECHANISM, LIVE, 'checkers/auto-update.js'],
     batchDefault: false },
-  { id: 'motion', tool: 'motion', buttonId: 'run-motion', kind: 'simple',
+  { id: 'motion', tool: 'motion', wcag: '2.2.2', buttonId: 'run-motion', kind: 'simple',
     files: [...MECHANISM, 'checkers/motion-check.js'], fnName: 'motion', allFrames: true,
     batchDefault: true },
-  { id: 'audio', tool: 'audio', buttonId: 'run-audio', kind: 'audio',
+  { id: 'audio', tool: 'audio', wcag: '1.4.2', buttonId: 'run-audio', kind: 'audio',
     files: [...MECHANISM, 'checkers/audio-check.js'],
     batchDefault: true },
-  { id: 'focus-visibility', tool: 'focus-visibility', buttonId: 'run-focus', kind: 'simple',
+  { id: 'focus-visibility', tool: 'focus-visibility', wcag: '2.4.7', buttonId: 'run-focus', kind: 'simple',
     files: [OVERLAY, FOCUS_STYLE, 'checkers/focus-walker.js'], fnName: 'focusWalker',
     batchDefault: true },
-  { id: 'keyboard-access', tool: 'keyboard-access', buttonId: 'run-keyboard-access', kind: 'keyboard',
+  { id: 'keyboard-access', tool: 'keyboard-access', wcag: '2.1.1', buttonId: 'run-keyboard-access', kind: 'keyboard',
     files: [OVERLAY, 'checkers/keyboard-access.js'],
     batchDefault: true },
-  { id: 'form-labels', tool: 'form-labels', buttonId: 'run-form-labels', kind: 'simple',
+  { id: 'form-labels', tool: 'form-labels', wcag: '1.3.1', buttonId: 'run-form-labels', kind: 'simple',
     files: [...FORMS, 'checkers/form-labels.js'], fnName: 'formLabels', allFrames: true,
     batchDefault: true },
-  { id: 'tables', tool: 'tables', buttonId: 'run-tables', kind: 'tables',
+  { id: 'tables', tool: 'tables', wcag: '1.3.1', buttonId: 'run-tables', kind: 'tables',
     files: TABLE_FILES,
     batchDefault: true },
   // Reads layout, so it runs before text-spacing applies its overrides.
-  { id: 'css-position', tool: 'css-position', buttonId: 'run-css-position', kind: 'css-position',
+  { id: 'css-position', tool: 'css-position', wcag: '1.3.2', buttonId: 'run-css-position', kind: 'css-position',
     files: CSS_POSITION_FILES,
     batchDefault: true },
-  { id: 'target-size', tool: 'target-size', buttonId: 'run-target-size', kind: 'simple',
+  { id: 'target-size', tool: 'target-size', wcag: '2.5.8', buttonId: 'run-target-size', kind: 'simple',
     files: [OVERLAY, 'checkers/target-size.js'], fnName: 'targetSize', allFrames: true,
     batchDefault: true },
-  { id: 'reflow', tool: 'reflow', buttonId: 'run-reflow-scan', kind: 'simple',
+  { id: 'reflow', tool: 'reflow', wcag: '1.4.10', buttonId: 'run-reflow-scan', kind: 'simple',
     files: ['checkers/reflow-scan.js'], fnName: 'reflowScan',
     gate: () => !!(lastState && lastState.reflow),
     gateHint: 'enable the Reflow test toggle first',
     batchDefault: true },
-  { id: 'text-spacing-analyze', tool: 'text-spacing', buttonId: 'run-text-spacing', kind: 'simple',
+  { id: 'text-spacing-analyze', tool: 'text-spacing', wcag: '1.4.12', buttonId: 'run-text-spacing', kind: 'simple',
     files: ['checkers/text-spacing.js'], fnName: 'textSpacing', allFrames: true, arg: 'analyze',
     after: () => { $('toggle-text-spacing').textContent = 'Remove overrides'; },
     // Batch only: the analyze pass leaves the overrides applied (matching the
@@ -738,17 +740,41 @@ const CHECKERS = [
       $('toggle-text-spacing').textContent = 'Apply overrides';
     },
     batchDefault: true },
-  { id: 'hover-static', tool: 'hover-content', buttonId: null, kind: 'hover',
+  { id: 'hover-static', tool: 'hover-content', wcag: '1.4.13', buttonId: null, kind: 'hover',
     probe: false, batchDefault: true },
-  { id: 'hover-probe', tool: 'hover-content', buttonId: 'run-hover', kind: 'hover',
+  { id: 'hover-probe', tool: 'hover-content', wcag: '1.4.13', buttonId: 'run-hover', kind: 'hover',
     probe: true, batchDefault: false },
 ];
+
+// Adds a note to the tool's '(page)' finding, or adds one as a review. One
+// '(page)' finding per tool keeps the diff fingerprint unique.
+function addPageNote(findings, tool, wcag, note) {
+  const page = findings.find((f) => f.selector === '(page)');
+  if (page) page.details += ` ${note}`;
+  else findings.push({ tool, wcag, severity: 'review', selector: '(page)', snippet: '', details: note });
+}
+
+// A null result is a frame whose checker threw (the exec route nulls a
+// subframe error), not a frame with nothing found: it must never read as
+// "0 findings".
+function noteFailedFrames(entry, results, findings) {
+  const failed = results.filter((r) => r.result == null).length;
+  if (!failed) return;
+  addPageNote(
+    findings,
+    entry.tool,
+    entry.wcag,
+    `The ${entry.tool} check failed in ${failed} frame${failed === 1 ? '' : 's'}, so content there was not checked. ` +
+      `Check those frames by hand (WCAG ${entry.wcag}).`
+  );
+}
 
 async function execChecker(entry) {
   const allFrames = entry.allFrames === true;
   await inject([...LIBS, ...entry.files], allFrames);
   const results = await callChecker(entry.fnName, entry.arg ?? null, allFrames);
   const merged = results.flatMap((r) => (Array.isArray(r.result) ? r.result : []));
+  noteFailedFrames(entry, results, merged);
   const { findings } = await storeToolFindings(entry.tool, merged);
   if (entry.after) entry.after();
   return { tool: entry.tool, count: findings.length };
@@ -828,16 +854,14 @@ async function execAudio(entry) {
     playing += r.result.playing || 0;
     if (r.frameId === 0) hooked = !!r.result.hooked;
   }
+  noteFailedFrames(entry, results, findings);
   const live = await chrome.tabs.get(tab.id);
   if (live.audible && !playing) {
     const note =
       'Chrome reports that this tab is playing sound, but no unmuted media element in the page is playing. ' +
       'The sound may come from Web Audio or from a cross-origin iframe. Find the source, check whether it started without user action and plays for more than 3 seconds, ' +
       'and if so check for a control within the first three elements (WCAG 1.4.2 / Trusted Tester 2.A).';
-    // Keep one '(page)' finding per tool so the diff fingerprint stays unique.
-    const page = findings.find((f) => f.selector === '(page)');
-    if (page) page.details += ` ${note}`;
-    else findings.push({ tool: 'audio', wcag: '1.4.2', severity: 'review', selector: '(page)', snippet: '', details: note });
+    addPageNote(findings, 'audio', '1.4.2', note);
   }
   const stored = await storeToolFindings('audio', findings);
   return { tool: 'audio', count: stored.findings.length, hooked };
@@ -861,6 +885,7 @@ async function execKeyboardAccess(entry) {
   if (pageNotes.length) {
     findings.push({ ...pageNotes[0], details: [...new Set(pageNotes.map((f) => f.details))].join(' ') });
   }
+  noteFailedFrames(entry, results, findings);
   let note = '';
   if (!res || !res.ok) {
     note =
@@ -870,12 +895,7 @@ async function execKeyboardAccess(entry) {
   } else if (res.truncated) {
     note = 'The page has more elements with click listeners than the scan reads; some were not checked by their listeners.';
   }
-  if (note) {
-    // Keep one '(page)' finding per tool so the diff fingerprint stays unique.
-    const page = findings.find((f) => f.selector === '(page)');
-    if (page) page.details += ` ${note}`;
-    else findings.push({ tool: 'keyboard-access', wcag: '2.1.1', severity: 'review', selector: '(page)', snippet: '', details: note });
-  }
+  if (note) addPageNote(findings, 'keyboard-access', '2.1.1', note);
   const stored = await storeToolFindings('keyboard-access', findings);
   return { tool: 'keyboard-access', count: stored.findings.length };
 }
@@ -1336,11 +1356,18 @@ async function initBatchSelection() {
   }
 }
 
+// The last batch's outcome, in chrome.storage.session `batch:${tabId}`:
+// {at, ran, total, errors: [{id, tool, wcag, error, skipped}]}. The headless
+// runner (tools/headless-run) waits for it, and turns each error into a
+// '(page)' review: a checker that did not run must not read as 0 findings.
+const batchKey = () => `batch:${tab.id}`;
+
 async function runBatch() {
   const btn = $('run-selected');
   if (isBusy(btn)) return;
   setBusy(btn, true);
   banner('');
+  const key = batchKey(); // the side panel can switch tabs during the run
   const selected = new Set(
     [...document.querySelectorAll('.batch-select')]
       .filter((b) => b.checked && !b.disabled)
@@ -1351,18 +1378,21 @@ async function runBatch() {
   const queue = CHECKERS.filter((e) => selected.has(e.id));
   if (!queue.length) {
     banner('Nothing selected — tick the checkbox on at least one checker.');
+    await chrome.storage.session.set({ [key]: { at: Date.now(), ran: 0, total: 0, errors: [] } });
     setBusy(btn, false);
     return;
   }
   announce(`Running ${queue.length} checker${queue.length === 1 ? '' : 's'}…`);
   const errors = [];
+  const fail = (entry, error, skipped = false) =>
+    errors.push({ id: entry.id, tool: entry.tool, wcag: entry.wcag, error, skipped });
   let total = 0;
   let ran = 0;
   let i = 0;
   for (const entry of queue) {
     $('batch-progress').textContent = `${++i}/${queue.length}: ${entry.tool}…`;
     if (entry.gate && !entry.gate()) {
-      errors.push(`${entry.tool}: skipped — ${entry.gateHint || 'not available'}`);
+      fail(entry, entry.gateHint || 'not available', true);
       continue;
     }
     try {
@@ -1371,15 +1401,18 @@ async function runBatch() {
       ran++;
       if (entry.batchCleanup) await entry.batchCleanup();
     } catch (e) {
-      errors.push(`${entry.tool}: ${e && e.message ? e.message : e}`);
+      fail(entry, e && e.message ? e.message : String(e));
     }
   }
   $('batch-progress').textContent = '';
+  await chrome.storage.session.set({ [key]: { at: Date.now(), ran, total, errors } });
   announce(
     `Batch complete: ${total} findings across ${ran} checker${ran === 1 ? '' : 's'}` +
       (errors.length ? `; ${errors.length} skipped/failed` : '')
   );
-  if (errors.length) banner(errors.join(' · '));
+  if (errors.length) {
+    banner(errors.map((e) => `${e.tool}: ${e.skipped ? 'skipped — ' : ''}${e.error}`).join(' · '));
+  }
   setBusy(btn, false);
 }
 

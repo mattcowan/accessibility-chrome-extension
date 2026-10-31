@@ -30,6 +30,7 @@ Each checker row that can run in a batch has a checkbox. **Run selected** runs t
 - At the end of a batch, the text spacing analysis removes its spacing overrides, so they cannot change the results of other checkers. The text spacing button in its own row leaves them applied.
 - Tables does not draw its overlay in a batch. If the overlay is already on, the batch updates it.
 - The tools that start and stop are not in the batch: text spacing apply and remove, the accessible-name inspector, the live-regions monitor, the focus locator, error capture, and the input watcher. Audio **Reload and record** is not in the batch either, because it reloads the page.
+- To run the batch from a script, with no window, use the [headless runner](../tools/headless-run/).
 
 ## Report
 

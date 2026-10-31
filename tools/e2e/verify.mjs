@@ -21,7 +21,8 @@
 // where the test plays the tester with real clicks, keys and selects, and
 // the Tables checker (1.3.1 / TT section 14: guess, Chrome role, header
 // algorithm, overlay, the tester's saved choice), and CSS positioning
-// (1.3.2 / TT 15.B: order check, overlay, Linearize). Older checkers (text spacing, target size, focus, hover, reflow,
+// (1.3.2 / TT 15.B: order check, overlay, Linearize), and the headless
+// runner (#33: the popup's findings, output, exit codes, a failed frame). Older checkers (text spacing, target size, focus, hover, reflow,
 // accname, live regions) are not covered yet; add a section per checker.
 //
 // How it works (see CLAUDE.md "Verify changes" for the gotchas):
@@ -36,6 +37,7 @@
 //   a click on it (this script's expectations() helper does that; the
 //   extension itself injects only through the SW).
 import { createRequire } from 'node:module';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -1410,6 +1412,89 @@ async function silentSections() {
   await env.ctx.close();
 }
 
+// ============ #33: the headless runner (tools/headless-run/run.mjs) ============
+// It drives this same popup headless, so on a fixture its findings must be
+// the popup's own Run selected results. It runs as a child process against
+// this script's server; its browser is headless and takes no focus.
+const CLI = path.join(REPO, 'tools', 'headless-run', 'run.mjs');
+function runCli(args) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [CLI, ...args], { maxBuffer: 1e8 }, (err, stdout, stderr) => {
+      let findings = null;
+      try {
+        findings = JSON.parse(stdout);
+      } catch {
+        // not JSON (a usage error, or --csv only)
+      }
+      resolve({ code: err ? err.code : 0, findings, stdout, stderr });
+    });
+  });
+}
+const findingKey = (f) => `${f.tool}|${f.wcag}|${f.selector}|${f.severity}`;
+const CSV_COLUMNS = 'tool,wcag,severity,selector,snippet,details,url,timestamp,status';
+
+async function cliSections() {
+  const env = await launch('no-user-gesture-required');
+  // Same findings as the popup. A fresh profile: the boxes hold their
+  // defaults, as the runner's do when given no --checkers.
+  for (const file of ['form-labels.html', 'tiny-targets.html', 'accname.html']) {
+    const { page, tabId } = await openFixture(env, file, 1500);
+    await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+    await clickAndWait(env, 'run-selected', /^Batch complete/);
+    const popupFindings = await env.popup.evaluate(async (k) => {
+      const store = (await chrome.storage.session.get(k))[k];
+      return Object.values(store.tools).flatMap((t) => t.findings);
+    }, `findings:${tabId}`);
+    await page.close();
+    const cli = await runCli([BASE + file, '--json', '-']);
+    const a = new Set((cli.findings || []).map(findingKey));
+    const b = new Set(popupFindings.map(findingKey));
+    const diff = [...[...a].filter((k) => !b.has(k)).map((k) => `+${k}`), ...[...b].filter((k) => !a.has(k)).map((k) => `-${k}`)];
+    check(`[cli] ${file}: the same findings as the popup's Run selected`, cli.findings && !diff.length && a.size > 0, diff.join(' ') || cli.stderr);
+    const fails = popupFindings.some((f) => f.severity === 'fail');
+    check(`[cli] ${file}: exit code ${fails ? 1 : 0} (${fails ? 'a' : 'no'} fail)`, cli.code === (fails ? 1 : 0), `exit ${cli.code}: ${cli.stderr}`);
+  }
+  await env.ctx.close();
+
+  // Output: a JSON array in the shared schema (exactly its keys, in order),
+  // and the popup/csv.js columns.
+  {
+    const csvFile = path.join(os.tmpdir(), `a11y-cli-${process.pid}.csv`);
+    const cli = await runCli([BASE + 'tiny-targets.html', '--checkers', 'target-size', '--json', '-', '--csv', csvFile]);
+    const shape = Array.isArray(cli.findings) && cli.findings.length > 0 &&
+      cli.findings.every((f) => Object.keys(f).join(',') === CSV_COLUMNS && f.url === BASE + 'tiny-targets.html' && f.tool === 'target-size');
+    check('[cli] --json writes an array of findings in the shared schema', shape, cli.stdout.slice(0, 300));
+    const csv = fs.existsSync(csvFile) ? fs.readFileSync(csvFile, 'utf8').split('\r\n') : [];
+    fs.rmSync(csvFile, { force: true });
+    check('[cli] --csv writes the popup/csv.js columns, one row per finding', csv.includes(CSV_COLUMNS) &&
+      csv.length - csv.indexOf(CSV_COLUMNS) - 2 === (cli.findings || []).length, csv.slice(0, 5).join(' | '));
+  }
+  // An unknown id is an error that lists the valid ids.
+  {
+    const cli = await runCli([BASE + 'tiny-targets.html', '--checkers', 'motion,nope']);
+    check('[cli] an unknown checker id exits 2 and lists the valid ids', cli.code === 2 && /Unknown checker id: nope/.test(cli.stderr) &&
+      /Valid ids: .*motion.*target-size/.test(cli.stderr), `exit ${cli.code}: ${cli.stderr}`);
+  }
+  // A checker that fails in a frame gives a '(page)' review, never 0 found:
+  // in a subframe the popup adds it (both runs give it), in the top frame the
+  // batch cannot run the checker and the runner adds it.
+  {
+    const cli = await runCli([BASE + 'frame-crash.html', '--checkers', 'target-size']);
+    const f = cli.findings || [];
+    check('[cli] a checker that fails in a subframe gives a (page) review', f.length === 1 && f[0].selector === '(page)' &&
+      f[0].severity === 'review' && /failed in 1 frame/.test(f[0].details) && cli.code === 0, `exit ${cli.code}: ${JSON.stringify(f)}`);
+    const top = await runCli([BASE + 'frame-crash.html?top=1', '--checkers', 'target-size']);
+    const t = top.findings || [];
+    check('[cli] a checker that fails in the top frame gives a (page) review', t.length === 1 && t[0].selector === '(page)' &&
+      t[0].severity === 'review' && /check failed, so the page was not checked/.test(t[0].details) && top.code === 0, `exit ${top.code}: ${JSON.stringify(t)}`);
+  }
+  {
+    const popupEnv = await launch('no-user-gesture-required');
+    await assertPage(popupEnv, '[popup frame crash]', 'frame-crash.html', { tool: 'target-size', buttonId: 'run-target-size', wcag: '2.5.8', waitMs: 1500 });
+    await popupEnv.ctx.close();
+  }
+}
+
 // The audio checker (1.4.2 / TT 2.A) and Reload and record: real sound.
 // Run with --audio or --all.
 async function audioSections() {
@@ -1584,7 +1669,10 @@ async function audioSections() {
 }
 
 try {
-  if (RUN_SILENT) await silentSections();
+  if (RUN_SILENT) {
+    await silentSections();
+    await cliSections();
+  }
   if (RUN_AUDIO) await audioSections();
 } catch (e) {
   check('script error', false, e.stack);

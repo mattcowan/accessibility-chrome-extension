@@ -419,7 +419,7 @@ chrome.debugger.onDetach.addListener(async (source, reason) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   dbg.clearHolds(tabId);
   await dbg.clearTabState(tabId);
-  await chrome.storage.session.remove([`findings:${tabId}`, watchKey(tabId), `tables:${tabId}`]);
+  await chrome.storage.session.remove([`findings:${tabId}`, watchKey(tabId), `tables:${tabId}`, `batch:${tabId}`]);
 });
 
 // Re-apply emulation on navigation. Overrides should persist within a session,

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>A checker that crashes in a frame</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem; }
+    iframe { width: 420px; height: 80px; }
+  </style>
+</head>
+<!-- The (page) finding: a checker that throws in a frame must give a review
+     that says what was not checked, never "0 found" (#33). -->
+<body data-expect="review">
+  <h1>A checker that crashes in a frame</h1>
+  <p>
+    The frame below holds 15,000 open shadow roots, each inside the last.
+    The shared helpers walk into shadow roots by recursion
+    (<code>collectMatching</code> in <code>checkers/lib/findings.js</code>), so
+    Target size and Form labels overflow the stack there. The page itself has
+    no defect. With <code>?top=1</code> this page builds the same nest itself,
+    so the check fails in the top frame (the headless runner's case).
+  </p>
+  <iframe id="crash-frame" title="Frame where the checkers crash" srcdoc="
+    <!DOCTYPE html><html lang='en'><title>Deep shadow roots</title><body>
+    <p>Deep shadow roots.</p><div id='nest' hidden></div>
+    <script>
+      let root = document.getElementById('nest');
+      for (let i = 0; i < 15000; i++) {
+        const host = document.createElement('span');
+        root.appendChild(host);
+        root = host.attachShadow({ mode: 'open' });
+      }
+    </script></body></html>"></iframe>
+  <!-- Hidden: no layout for the nest (laid out, it crashes the renderer). -->
+  <div id="top-nest" hidden></div>
+  <script>
+    if (new URLSearchParams(location.search).has('top')) {
+      let root = document.getElementById('top-nest');
+      for (let i = 0; i < 15000; i++) {
+        const host = document.createElement('span');
+        root.appendChild(host);
+        root = host.attachShadow({ mode: 'open' });
+      }
+    }
+  </script>
+</body>
+</html>
