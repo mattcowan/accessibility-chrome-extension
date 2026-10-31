@@ -51,6 +51,10 @@ Each mode applies to one tab, through the Chrome DevTools Protocol:
 
 Keyboard traps need real Tab key presses, and a script in the page cannot send them. A separate Playwright command-line tool in [tools/keyboard-trap-scan/](tools/keyboard-trap-scan/) does this test (WCAG 2.1.2, Trusted Tester 4.C). It writes the same CSV columns as the extension.
 
+### Headless runner
+
+A script, a CI job, or an AI agent can run the batch checkers with no browser window: `node tools/headless-run/run.mjs <url>` runs **Run selected** on the page and writes the findings as JSON or CSV. It exits with code 1 when there is a `fail`. See [tools/headless-run/](tools/headless-run/).
+
 ## Install
 
 The extension is not in the Chrome Web Store. Load it from the source:

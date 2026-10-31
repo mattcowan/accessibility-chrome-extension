@@ -35,7 +35,13 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   `batchDefault: false`, as it adds its watch time); text-spacing analyze applies its
   override stylesheet as a side effect, so it runs after target-size/reflow and a
   `batchCleanup` removes the overrides (batch only — the individual button leaves
-  them applied); the slow hover probe runs last. The same popup.html also serves as
+  them applied); the slow hover probe runs last. Each entry's `wcag` is the criterion
+  of the `(page)` review for a frame whose checker threw (`noteFailedFrames`: a null
+  frame result is a crash, never "0 findings"; every registry kind reports it) and of
+  the headless runner's review for a checker the batch could not run. `runBatch`
+  writes its outcome to session `batch:${tabId}` = `{at, ran, total, errors: [{id,
+  tool, wcag, error, skipped}]}` — the headless runner's end-of-batch signal. The
+  same popup.html also serves as
   the **Chrome side panel** — the SW registers `popup/popup.html?context=panel` via
   `sidePanel.setOptions` at top level, and `IS_PANEL` in popup.js switches on
   tab-tracking listeners (`tabs.onActivated`/`onUpdated` → `refreshForActiveTab()`)
@@ -330,6 +336,21 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   after the stop), the popup sends them with `inputWatch stop`, and the SW logs them,
   returns the final log for the last sync, then clears it. After a navigation the button reads "Resume
   watcher" and starting again continues the log.
+- `tools/headless-run/run.mjs` (#33) — runs Run selected on one URL with no window
+  and writes findings as JSON/CSV (exit 1 on a `fail`, 2 on a usage/run error). It
+  drives the REAL popup page: stages the extension with `host_permissions` (as
+  verify.mjs does), launches headless Chromium (`channel: 'chromium'` — the default
+  headless shell loads no extensions), writes `batchSelection` to storage BEFORE the
+  popup reloads (initBatchSelection runs after an await, so ticking the boxes from
+  outside races it), reloads the popup with the target tab active, clicks
+  `#run-selected`, waits for `batch:${tabId}`, reads `findings:${tabId}`. Emulation
+  (`--reduced-motion`, `--reflow`) goes through the SW messages. Valid ids and
+  defaults are regex-read from the `CHECKERS` block in popup.js (entries must keep
+  `id:` first and `batchDefault:` last). The CSV comes from `popup/csv.js` itself
+  (copied to a temp `.mjs`: popup/ has no package.json). It never touches the target
+  page with Playwright (no `page.evaluate`: #15). Batch errors become `(page)`
+  reviews. Interactive tools (error capture, input watcher, locator, inspectors) are
+  out of scope.
 - `test-pages/*.html` — deliberate-defect fixtures. Every defect element carries a
   `data-expect="fail|warn|review|pass"` attribute; the E2E verify script asserts
   against these. Self-contained inline CSS/JS is intentional — ignore inline-style
@@ -416,6 +437,14 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   invalid in the injected script and `window.__kt` silently never installs. Write that
   code backslash-free (e.g. `String.fromCharCode(92)`) and parse-check with
   `new Function(HELPERS_SOURCE)` after editing.
+- **Playwright's headless mode adds `--hide-scrollbars`** (and `--mute-audio`). With
+  no scrollbar the page gets ~15 px more width: at the Reflow viewport an image
+  measured 290 px headless vs 275 px headed. The headless runner passes
+  `ignoreDefaultArgs: ['--hide-scrollbars']` for parity; keep it (verified 2026-10-31).
+- `test-pages/frame-crash.html` crashes checkers ON PURPOSE: 15 000 nested open
+  shadow roots (hidden — laid out, 20 000 crashed the renderer) overflow the stack in
+  `collectMatching`'s recursion (findings.js; 12 000 was enough on Linux). If that
+  walk ever becomes iterative, the fixture needs another real crash source.
 - `chrome.debugger` conflicts with open DevTools on the same tab (friendly error is
   mapped in debugger-manager); it coexists fine with Playwright's CDP connection.
 - `Page.addScriptToEvaluateOnNewDocument` silently does nothing under
@@ -478,7 +507,7 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   with sound, and `--all` runs both. The `[#15]` activation guard stays in the
   default run: it reads `hasBeenActive` and `play()` rejection, which muting does
   not change. Run `--audio` only when the user says sound is OK, and before handing
-  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 457 checks on 2026-10-20 after the #6 popup fixes, their peer review and PR #35 round 1: 406 in the default (muted) run (+20 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
+  over a change to `audio-check.js`, `audio-hook.js`, `mechanism.js` or Reload and record. 418 checks in the default (muted) run on 2026-10-31 after the headless runner (#33, +12 `[cli]`/frame-crash). 457 checks on 2026-10-20 after the #6 popup fixes, their peer review and PR #35 round 1: 406 in the default (muted) run (+20 `[popup #6]`) + 51 with `--audio`. 437 checks on 2026-10-19 after CSS positioning (#29, +50) and four PR #30 review rounds: 386 in the default (muted) run + 51 with `--audio` (the audio count is from before the reviews; no audio code changed). `[locator] reopened popup shows "Stop locator"` failed once and passed on the re-run — a timing flake in the popup-reload wait. All `[#15]` checks failing at once, "fresh page" included, means the page got real input: the browsers are headed and take focus, so a click or keystroke from someone using the machine gives activation. Re-run with hands off. 387 checks on 2026-10-15 after the #27 peer review (377 after the Tables checker, +102); 275 on 2026-10-09 after the PR #26 review (267 before it, 249 before the earlier review rounds; 208 before, 123 before the TT section 5 tools, 58 before #20). It stages
   a copy of the extension with `host_permissions: ["<all_urls>"]` added (in the OS temp
   folder), launches `chromium.launchPersistentContext` with `--load-extension`, opens
   `chrome-extension://<id>/popup/popup.html` in a tab, and drives the real popup buttons,
@@ -498,6 +527,12 @@ bundler, no TypeScript**. Loaded unpacked from the repo root.
   (Playwright sets no autoplay flag by default). Under Playwright,
   `chrome.debugger.getTargets()` always reports `attached: true` (Playwright's own
   session) — check the `tab:${id}` session state instead.
+- Headless runner: `node tools/headless-run/run.mjs test-pages/form-labels.html`
+  (a local file's folder is served on 127.0.0.1) → JSON on stdout, exit 1. The E2E
+  `[cli]` section checks parity with the popup's Run selected, the output shape, the
+  unknown-id error and both failed-frame paths (`frame-crash.html`). A one-off sweep
+  of every fixture (2026-10-31, headless runner vs headed popup) matched on every
+  tool|wcag|selector|severity; only timing-dependent counts in details differed.
 - Scanner: `cd tools/keyboard-trap-scan && node scan.js
   "file:///<absolute path to the repo>/test-pages/keyboard-trap.html"`
   → expect `fail`, exit 1; with `?escapable=1` → `warn`, exit 0;
