@@ -21,7 +21,8 @@
 // where the test plays the tester with real clicks, keys and selects, and
 // the Tables checker (1.3.1 / TT section 14: guess, Chrome role, header
 // algorithm, overlay, the tester's saved choice), and CSS positioning
-// (1.3.2 / TT 15.B: order check, overlay, Linearize). Older checkers (text spacing, target size, focus, hover, reflow,
+// (1.3.2 / TT 15.B: order check, overlay, Linearize), and the Reflow scan skipping
+// the extension's own layers (1.4.10, #31). Older checkers (text spacing, target size, focus, hover,
 // accname, live regions) are not covered yet; add a section per checker.
 //
 // How it works (see CLAUDE.md "Verify changes" for the gotchas):
@@ -1406,6 +1407,87 @@ async function silentSections() {
     await clickAndWait(env, 'clear-findings', /^Cleared the findings/);
     check('[popup #6] Clear findings is announced', true);
     await page.close();
+  }
+  await env.ctx.close();
+
+  // ============ #31: Reflow scan (1.4.10) skips the extension's own layers ============
+  // A fresh browser, so Run selected uses the default ticks. Overlay boxes
+  // drawn at the wide layout keep their page position after the 320 px
+  // override and used to read as fails.
+  env = await launch('no-user-gesture-required');
+  {
+    const setReflow = async (page, id, narrow) => {
+      await env.popup.click(`#${id}`);
+      await env.popup.waitForFunction((on) => document.getElementById('run-reflow-scan').disabled !== on, narrow, { timeout: 10000 });
+      await page.waitForFunction((on) => (document.documentElement.clientWidth <= 340) === on, narrow, { timeout: 10000 });
+      await sleep(500);
+    };
+    const scan = async (tabId) => {
+      await env.popup.evaluate(async (k) => chrome.storage.session.remove(k), `findings:${tabId}`);
+      await clickAndWait(env, 'run-reflow-scan', /^reflow: \d+ findings/);
+      return storedFindings(env, tabId, 'reflow');
+    };
+    const summary = (f) => f.map((x) => `${x.severity} ${x.selector}`).sort();
+    const overlayBoxes = (page) => page.evaluate(() => {
+      const layer = document.getElementById('__a11y-overlay');
+      return layer ? layer.childElementCount : 0;
+    });
+
+    // The fixture alone: data-expect per element.
+    let { page, tabId } = await openFixture(env, 'reflow.html', 500);
+    await setReflow(page, 'reflow-320', true);
+    const base = await scan(tabId);
+    // The fixture marks a wrapper; the scan reports the wide element inside
+    // it (the table, the pre). An expectation counts the worst finding on its
+    // element or inside it.
+    const inside = await page.evaluate((sels) => {
+      const out = {};
+      for (const w of document.querySelectorAll('[data-expect]')) {
+        out[w.id || w.className] = sels.filter((s) => s !== '(page)' && w.contains(document.querySelector(s)));
+      }
+      return out;
+    }, base.map((x) => x.selector));
+    for (const e of await expectations(env, tabId)) {
+      const key = await page.evaluate((sel) => { const w = document.querySelector(sel); return w.id || w.className; }, e.sel);
+      const got = severityFor(base.map((x) => (inside[key].includes(x.selector) ? { ...x, selector: e.sel } : x)), e.sel, '1.4.10');
+      check(`[reflow] reflow.html ${key} → ${e.expect}`, got === e.expect, `got ${got}; ${JSON.stringify(summary(base))}`);
+    }
+    await setReflow(page, 'reflow-off', false);
+
+    // The same page with every overlay on, drawn at the wide layout: the
+    // badge overlay (focus), the Tables and CSS positioning overlays and the
+    // focus locator. The result must not change.
+    await clickAndWait(env, 'run-focus', /^focus-visibility: \d+ findings/);
+    await clickAndWait(env, 'run-tables', /^tables: \d+ findings/);
+    await clickAndWait(env, 'run-css-position', /^css-position: \d+ findings/);
+    await clickAndWait(env, 'toggle-focus-locator', /^focus locator: on/);
+    await page.keyboard.press('Tab');
+    await sleep(300);
+    const layers = await page.evaluate(() => ['__a11y-overlay', '__a11y-tables', '__a11y-css-position', '__a11y-focus-locator'].filter((id) => document.getElementById(id)));
+    check('[reflow] reflow.html: all four extension layers are on before the scan', layers.length === 4, JSON.stringify(layers));
+    await setReflow(page, 'reflow-320', true);
+    const withLayers = await scan(tabId);
+    check('[reflow] reflow.html: the same findings with every overlay on', JSON.stringify(summary(withLayers)) === JSON.stringify(summary(base)), JSON.stringify({ base: summary(base), withLayers: summary(withLayers) }));
+    const kept = await page.evaluate(() => ['__a11y-overlay', '__a11y-tables', '__a11y-css-position', '__a11y-focus-locator'].filter((id) => document.getElementById(id)));
+    check('[reflow] reflow.html: the scan leaves every overlay on', kept.length === 4, JSON.stringify(kept));
+    await setReflow(page, 'reflow-off', false);
+    await clickAndWait(env, 'clear-all-checkers', /^Cleared/);
+    await page.close();
+
+    // The steps from the issue: Run selected (default ticks), Reflow 320 px,
+    // Scan overflow → no findings, and the badge overlay is still there.
+    for (const file of ['form-labels.html', 'focus-styles.html']) {
+      ({ page, tabId } = await openFixture(env, file, 500));
+      await clickAndWait(env, 'run-selected', /^Batch complete/, 120000);
+      const boxes = await overlayBoxes(page);
+      check(`[reflow] ${file}: Run selected drew overlay boxes`, boxes > 0, String(boxes));
+      await setReflow(page, 'reflow-320', true);
+      const f = await scan(tabId);
+      check(`[reflow] ${file}: Scan overflow after Run selected gives 0 findings`, f.length === 0, JSON.stringify(summary(f)));
+      check(`[reflow] ${file}: the scan does not remove the overlay`, (await overlayBoxes(page)) === boxes, String(await overlayBoxes(page)));
+      await setReflow(page, 'reflow-off', false);
+      await page.close();
+    }
   }
   await env.ctx.close();
 }
